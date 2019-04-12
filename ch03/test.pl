@@ -170,7 +170,7 @@ ok($nn == 50, "created 50 files");
 for my $ii (1..5) {
     my $xx = $ii * 10;
     my $yy = read_text("numbers/$xx.num");
-    ok($xx == $yy, "check value $xx");
+    ok($yy =~ /^\d+$/ && $xx == $yy, "check value $xx");
 }
 
 for my $ii (1..4) {
