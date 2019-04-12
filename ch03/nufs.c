@@ -81,7 +81,7 @@ nufs_getattr(const char *path, struct stat *st)
 	    rv = -ENOENT;
         }
     }
-    //printf("getattr(%s) -> (%d) {mode: %04o, size: %ld}\n", path, rv, st->st_mode, st->st_size);
+    printf("getattr(%s) -> (%d) {mode: %04o, size: %ld}\n", path, rv, st->st_mode, st->st_size);
     return rv;
 }
 
@@ -93,7 +93,7 @@ nufs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 {
     struct stat st;
     int rv;
-    rv = nufs_getattr("/", &st);
+    rv = nufs_getattr("/", &st); //todo what does this do?, should it be path?
     assert(rv == 0);
 
     slist* contents = directory_list(path);
@@ -105,7 +105,7 @@ nufs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	    cur = cur->next;
     }
 
-    //printf("readdir(%s) -> %d\n", path, rv);
+    printf("readdir(%s) -> %d\n", path, rv);
     return 0;
 }
 
@@ -139,7 +139,7 @@ nufs_mknod(const char *path, mode_t mode, dev_t rdev)
 	i++;
 	bit = bitmap_get(inodeBitmap, i);
     }
-    //printf("mknod(%s, %04o) -> %d\n", path, mode, rv);
+    printf("mknod(%s, %04o) -> %d\n", path, mode, rv);
     return rv;
 }
 
@@ -149,6 +149,16 @@ int
 nufs_mkdir(const char *path, mode_t mode)
 {
     int rv = nufs_mknod(path, mode | 040000, 0);
+    inode* ptr = pathToINode(path);
+    //todo error check
+    ptr->ptrs[0] = alloc_page();
+    void* dataPg = pages_get_page(ptr->ptrs[0]);
+    if(dataPg != NULL) {
+	dirent* cur = (dirent*)dataPg;
+	for(int i = 0; i < (4096 / sizeof(dirent)); ++i) {
+	    cur->inum = -1;
+	}
+    }
     printf("mkdir(%s) -> %d\n", path, rv);
     return rv;
 }
@@ -239,6 +249,85 @@ nufs_open(const char *path, struct fuse_file_info *fi)
     return rv;
 }
 
+
+int read_indirect_page(inode* fptr, char *buf, size_t size, off_t offset) {//sizeLeft) {
+    //fptr->iptr = alloc_page();
+    //printf("---indirect---- size = %ld || off = %ld\n", size, offset);
+    off_t offHere = offset;// - (2*4096); //we already checked 2 pages by the time we got here
+    void* metaPg = pages_get_page(fptr->iptr);
+    if(metaPg < 0) {
+	return -1;
+    }
+    int* metaPgInt = (int*)metaPg;
+    off_t i = offHere / 4096;
+
+    //printf("offset = %ld ||| offhere = %ld\n", offset, offHere);
+    size_t sizeLeft = size;
+    size_t sizeRead = 0;
+    // Add the data
+    while(sizeLeft > 0) {
+	//printf("sizeleft = %ld\n", sizeLeft);
+	int nextPgIdx = metaPgInt[i];
+	void* curPg = pages_get_page(nextPgIdx);
+	int s = min(sizeLeft, 4096);
+        //memcpy(curPg, buf, s);
+	//strncpy(buf, curPg, s);//size);//s);
+	//printf("memcpy info -> nextPgIdx = %d, curPg = %p, s = %d\n", nextPgIdx, curPg, s);
+	strncpy(buf, curPg, s);
+	sizeRead += s;
+	buf += s;
+	i++;
+	sizeLeft -= s;
+    }
+    return sizeRead;
+}
+
+//analogous to writing (ie. in 4096 byte chunks)
+int read_pages(inode* fptr, char *buf, size_t size, off_t offset) {
+    //void* data = pages_get_page(fptr->ptrs[0]);
+    //handle offsets > 4096?
+
+    int numPages = bytes_to_pages(fptr->size);
+    int sizeLeft = fptr->size;
+
+    if(numPages == 1 && offset < 4096) { //todo incorporate page size into how much is read inside the if
+	puts("read from first page");
+	//fptr->ptrs[0] = alloc_page();
+        void* pg = pages_get_page(fptr->ptrs[0]);
+        //memcpy(pg, buf, sizeLeft);
+	strncpy(buf, pg, sizeLeft);
+	return fptr->size;
+    }
+    if(numPages > 1 && offset < 4096) {
+	    puts("other case");
+	//fptr->ptrs[0] = alloc_page();
+        void* pg = pages_get_page(fptr->ptrs[0]);
+        //memcpy(pg, buf, 4096);
+	strncpy(buf, pg, 4096);
+	sizeLeft -= 4096;
+    }
+    if(numPages == 2 && offset < (2 * 4096)) {
+	puts("read from second page");
+	//fptr->ptrs[1] = alloc_page();
+        void* pg = pages_get_page(fptr->ptrs[1]);
+        //memcpy(pg, buf, sizeLeft);
+	strncpy(buf + 4096, pg, sizeLeft);
+	return fptr->size;
+    }
+    if(numPages > 2 && offset < (2 * 4096)) {
+        //fptr->ptrs[1] = alloc_page();
+        void* pg = pages_get_page(fptr->ptrs[1]);
+	strncpy(buf + 4096, pg, 4096);
+	sizeLeft -= 4096;
+    }
+    //todo, the offset below is taken care of but should be subtracted here instead
+    int rv = read_indirect_page(fptr, buf + (2 * 4096), sizeLeft, offset);//size, offset);//sizeLeft);
+    //assert(rv > 0); todo better error check here
+
+    return rv + 4096 + 4096;
+}
+
+
 // Actually read data
 int
 nufs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
@@ -246,18 +335,96 @@ nufs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_fi
     int rv = -1;
     inode* fptr = pathToINode(path);
     if(fptr != NULL) {
-	//we assume files are just one block for now
-	void* data = pages_get_page(fptr->ptrs[0]);
+	rv = read_pages(fptr, buf, size, offset);
+	/*void* data = pages_get_page(fptr->ptrs[0]);
 	data += offset;
 	strncpy(buf, data, fptr->size);
-	rv = fptr->size;
+	rv = fptr->size;*/
     }
 
-    //printf("read(%s, %ld bytes, @+%ld) -> %d\n", path, size, offset, rv);
+    printf("read(%s, %ld bytes, @+%ld) -> %d\n", path, size, offset, rv);
     return rv;
 }
 
+//could probably use offset bytes_to_page to figure out where we write
+//instead of checking for == 0
+int write_indirect_page(inode* fptr, const char *buf, size_t size, off_t offset) {//sizeLeft) {
+    if(fptr->iptr == 0) {
+        fptr->iptr = alloc_page();
+    }
+    void* metaPg = pages_get_page(fptr->iptr);
+    if(metaPg < 0) {
+	return -1;
+    }
+    int* metaPgInt = (int*)metaPg;
+    // Find first empty spot
+    int i = 0;
+    while(metaPgInt[i] != 0) {
+	i++;
+    }
+    //todo add bounds checking, ^^^ is not an infinite array
+    // Add the data
+    int sizeLeft = size;
+    while(sizeLeft > 0) {
+        int nextPgIdx = alloc_page();
+	if(nextPgIdx == -1) {
+		return -1; //todo set errno????
+	}
+	void* curPg = pages_get_page(nextPgIdx);
+	int s = min(sizeLeft, 4096);
+        memcpy(curPg, buf, s);//size);//s);
+	fptr->size += s;//size;
+	metaPgInt[i] = nextPgIdx;
+	i++;
+	sizeLeft -= s;
+    }
+    return 0; //success
+}
+
+
+//this doesn't really use offset.... is that a problem?
+//see note above, could probably  use to figure out what page to write to immediately
+int write_pages(inode* fptr, const char *buf, size_t size, off_t offset) {
+   // int numPages = bytes_to_pages(fptr->size);
+   // int sizeLeft = fptr->size;
+
+    if(fptr->ptrs[0] == 0) {//numPages == 1) {
+	fptr->ptrs[0] = alloc_page();
+        void* pg = pages_get_page(fptr->ptrs[0]);
+        memcpy(pg, buf, size);//sizeLeft);
+	fptr->size += size;
+	return size;//fptr->size;
+    }
+    /*if(numPages > 1) {
+	fptr->ptrs[0] = alloc_page();
+        void* pg = pages_get_page(fptr->ptrs[0]);
+        memcpy(pg, buf, 4096);
+	sizeLeft -= 4096;
+    }*/
+    if(fptr->ptrs[1] == 0) {//numPages == 2) {
+	puts("found we need another page");
+	    fptr->ptrs[1] = alloc_page();
+        void* pg = pages_get_page(fptr->ptrs[1]);
+        memcpy(pg, buf, size);//sizeLeft);
+	fptr->size += size;
+	return size;//fptr->size;
+    }
+    /*if(numPages > 2) {
+        fptr->ptrs[1] = alloc_page();
+        void* pg = pages_get_page(fptr->ptrs[1]);
+        memcpy(pg, buf, 4096);
+	sizeLeft -= 4096;
+    }*/
+
+    int rv = write_indirect_page(fptr, buf, size, offset);//sizeLeft);
+    //assert(rv > 0);
+
+    return size;//fptr->size;
+}
+
 // Actually write data
+// This function is called with size being how much to write at a time
+// ie. for a 5K file, it's called twice with appropriate sizes and offsets
 int
 nufs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
 {
@@ -265,17 +432,17 @@ nufs_write(const char *path, const char *buf, size_t size, off_t offset, struct 
     inode* fptr = pathToINode(path);
     if(fptr != NULL) {
 	//currently assume just writing 1 page or less
-	fptr->refs = 1;
+	fptr->refs = 1; //todo this is almost certainly wrong
 	//mode is set in mknod
-	fptr->size = size;
-	fptr->ptrs[0] = alloc_page();
-	void* pg = pages_get_page(fptr->ptrs[0]);
-	memcpy(pg, buf, size);
+	//fptr->size = size;
+
+	rv = write_pages(fptr, buf, size, offset);
+
 	//assert the copy didn't fail?
-	rv = size;
+	//rv = size;
     }
 
-    //printf("write(%s, %ld bytes, @+%ld) -> %d\n", path, size, offset, rv);
+    printf("write(%s, %ld bytes, @+%ld) -> %d\n", path, size, offset, rv);
     return rv;
 }
 

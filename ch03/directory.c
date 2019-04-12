@@ -196,10 +196,33 @@ slist* directory_list_page(slist* list, int dataPgIdx) {
     return list;
 }
 
+// from https://www.tutorialspoint.com/c_standard_library/c_function_strtok.htm
+inode* pathToDir(const char* path) {
+    slist* p = s_split(path, '/');//pathToSList(path);
+    inode* rootDir = (inode*)pages_get_page(1);
+    inode* cur = rootDir;
+    inode* prev = rootDir;
+    while(p != NULL && !streq(p->data, "")) {
+	int dirIdx = directory_lookup(cur, p->data);
+	void* dirData = NULL;
+	if(dirIdx < MAX_DIR_ENTRIES) {
+	    dirData = pages_get_page(cur->ptrs[0]);
+	} else {
+	    dirData = pages_get_page(cur->ptrs[1]);
+	}
+	dirent* curEntries = (dirent*)dirData;
+	int inodeNum = curEntries[dirIdx].inum;
+	prev = cur;
+	cur = rootDir + inodeNum;
+	p = p->next;
+    }
+    return prev;
+}
 
 // Lists directory
 slist* directory_list(const char* path) {
-    inode* dirptr = (inode*)pages_get_page(1);
+    inode* dirptr = pathToDir(path);
+    //inode* dirptr = (inode*)pages_get_page(1);
     slist* out = NULL; //keep like this
     out = directory_list_page(out, dirptr->ptrs[0]);
     if(dirptr->size >= (2 * 4096)) {
