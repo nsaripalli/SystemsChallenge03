@@ -195,7 +195,7 @@ nufs_unlink(const char *path) {
     dirptr->last_change = ts;
 
     char* fileName = getTextAfterLastSlash(path);
-    int inodeNum = directory_delete(dirptr, filename);
+    int inodeNum = directory_delete(dirPtr, fileName);
     assert(inodeNum >= 0);
 
     inode *fileptr = get_inode(inodeNum);
@@ -391,20 +391,23 @@ int read_indirect_page(inode *fptr, char *buf, size_t size, off_t offset) {//siz
 int read_pages(inode *fptr, char *buf, size_t size, off_t offset) {
     //todo handle offsets > 4096?
     int numPages = bytes_to_pages(fptr->size);
-    int sizeLeft = fptr->size;
+    int sizeLeft = size;//fptr->size;
+    int sizeRead = 0;
 
     if (numPages == 1 && offset < 4096) { //todo incorporate page size into how much is read inside the if
         //puts("read from first page");
         void *pg = pages_get_page(fptr->ptrs[0]);
         //memcpy(pg, buf, sizeLeft); todo use this instead?? not sure
         strncpy(buf, pg, sizeLeft);
-        return fptr->size;
+	sizeRead += sizeLeft;
+        return sizeRead;//fptr->size;
     }
     if (numPages > 1 && offset < 4096) {
         //puts("other case");
         void *pg = pages_get_page(fptr->ptrs[0]);
         //memcpy(pg, buf, 4096);
         strncpy(buf, pg, 4096);
+	sizeRead += 4096;
         sizeLeft -= 4096;
     }
     if (numPages == 2 && offset < (2 * 4096)) {
@@ -412,18 +415,19 @@ int read_pages(inode *fptr, char *buf, size_t size, off_t offset) {
         void *pg = pages_get_page(fptr->ptrs[1]);
         //memcpy(pg, buf, sizeLeft);
         strncpy(buf + 4096, pg, sizeLeft);
-        return fptr->size;
+	sizeRead += sizeLeft;
+        return sizeRead;
     }
     if (numPages > 2 && offset < (2 * 4096)) {
         void *pg = pages_get_page(fptr->ptrs[1]);
         strncpy(buf + 4096, pg, 4096);
         sizeLeft -= 4096;
+	sizeRead += 4096;
     }
-    //todo, the offset below is taken care of but should be subtracted here instead
     int rv = read_indirect_page(fptr, buf + (2 * 4096), sizeLeft, offset);//size, offset);//sizeLeft);
     //assert(rv > 0); todo better error check here
 
-    return rv + 4096 + 4096;
+    return sizeRead + rv;// + 4096 + 4096;
 }
 
 
