@@ -17,6 +17,7 @@ typedef struct dirent {
 
 void directory_init();
 int directory_lookup(inode* dd, const char* name);
+int directory_lookup_inode(inode* dd, const char* name);
 //int tree_lookup(const char* path);
 int directory_put(inode* dd, const char* name, int inum);
 int directory_delete(inode* dd, const char* name);

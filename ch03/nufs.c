@@ -192,7 +192,7 @@ nufs_unlink(const char *path) {
     inode* dirPtr = pathToLastItemContainer(path);
     struct timespec ts;
     int rv2 = clock_getres(CLOCK_REALTIME, &ts);
-    dirptr->last_change = ts;
+    dirPtr->last_change = ts;
 
     char* fileName = getTextAfterLastSlash(path);
     int inodeNum = directory_delete(dirPtr, fileName);
@@ -232,28 +232,62 @@ nufs_rmdir(const char *path) {
 // called to move a file within the same filesystem
 int
 nufs_rename(const char *from, const char *to) {
+       int rv = -1;
+//    void *inodes = pages_get_page(1);
+//    inode *dirInode = (inode *) inodes;
+
+    inode* dirInodeFrom = pathToLastItemContainer(from);
+    inode* dirInodeTo = pathToLastItemContainer(to);
+
+    char* fileNameFrom = getTextAfterLastSlash(from);
+    char* fileNameTo = getTextAfterLastSlash(to);
+
+    int fromINode = directory_lookup_inode(dirInodeFrom , fileNameFrom);
+    int toINode = directory_lookup_inode(dirInodeTo , fileNameTo);
+
+
+    //-- Check errors --
+    
+    // Both directory paths exist?
+    if(dirInodeFrom == NULL || dirInodeTo == NULL) {
+	return -1;
+    }
+    // from directory has the file, to directory does not
+    if(!(fromINode >= 0 && toINode < 0)) {
+	return -1;
+    }
+   
     struct timespec ts;
     int rv2 = clock_getres(CLOCK_REALTIME, &ts);
     if (rv2 < 0) {
         return -1;
     }
-    int rv = -1;
-    void *inodes = pages_get_page(1);
-    inode *dirInode = (inode *) inodes;
-    dirInode->last_view = ts;
-    dirInode->last_change = ts;
+    dirInodeFrom->last_view = ts;
+    dirInodeFrom->last_change = ts;
 
-    dirent *dirEntries = (dirent *) pages_get_page(dirInode->ptrs[0]);
+    dirInodeTo->last_view = ts;
+    dirInodeTo->last_change = ts;
 
-    int idx = directory_lookup(dirInode, (from + 1)); //first inode is /
+    rv = directory_delete(dirInodeFrom, fileNameFrom);
+    if (rv < 0) {
+	puts("Rename - directory_delete failed");
+	return -1;
+    }
+    directory_put(dirInodeTo, fileNameTo, fromINode);
+    if (rv < 0) {
+	puts("Rename - directory_put failed");
+	return -1;
+    }
+    
+    /* old stuff
+    int idx = directory_lookup(dirInode, fileName);//(from + 1));
     if (idx != -1) {
         //found the from entry
         dirent *entry = dirEntries + idx;
         strcpy(entry->name, (to + 1));
         rv = 0;
-    }
-
-
+    }*/
+    rv = 0;
     printf("rename(%s => %s) -> %d\n", from, to, rv);
     return rv;
 }
