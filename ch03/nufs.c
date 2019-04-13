@@ -189,19 +189,20 @@ int
 nufs_unlink(const char *path) {
     int rv = 0;
     //remove from directory entry
-    inode *dirptr = (inode *) pages_get_page(1); //root dir in inode 0
+    inode* dirPtr = pathToLastItemContainer(path);
     struct timespec ts;
     int rv2 = clock_getres(CLOCK_REALTIME, &ts);
     dirptr->last_change = ts;
 
-
-    int inodeNum = directory_delete(dirptr, (path + 1)); //strip leading /
+    char* fileName = getTextAfterLastSlash(path);
+    int inodeNum = directory_delete(dirptr, filename);
     assert(inodeNum >= 0);
 
     inode *fileptr = get_inode(inodeNum);
     fileptr->last_change = ts;
 
     //assume files are only 1 page of data
+    //todo this needs to be removed
     if (fileptr->size > 0) {
         free_page(fileptr->ptrs[0]);
     }
