@@ -68,15 +68,26 @@ int directory_lookup(inode* dd, const char* name) {
 	pgRes = directory_lookup_page(pages_get_page(dd->ptrs[1]), name);
     }
     return pgRes;
-
-/*    dirent* cur = (dirent*)pages_get_page(dd->ptrs[0]);
-    int cntr = 0;
-    while(cntr < MAX_DIR_ENTRIES && cur->inum != -1) {
-        if(streq(cur->name, name)) { return cntr; }
-	cur++;	cntr++;
-    }
-    return -1;*/
 }
+
+// Returns the inode of the item in the directory, or -1
+int directory_lookup_inode(inode* dd, const char* name) {
+    // Look in first direct page
+    int pgRes = directory_lookup_page(pages_get_page(dd->ptrs[0]), name);
+    if(pgRes != -1) {
+	return ((dirent*)pages_get_page(dd->ptrs[0]))[pgRes].inum;
+    }
+    if(dd->size >= (4096 * 2)) {
+        //Didn't find in first direct page, check second
+	pgRes = directory_lookup_page(pages_get_page(dd->ptrs[1]), name);
+	if(pgRes != -1) {
+	    return ((dirent*)pages_get_page(dd->ptrs[1]))[pgRes].inum;
+	}
+    }
+    return pgRes;
+}
+
+
 
 //int tree_lookup(const char* path);
 
@@ -87,7 +98,7 @@ int directory_put_page(int dataPgIdx, const char* name, int inum) {
     int cntr = 0;
     int spotFound = 0;
     while(cntr < MAX_DIR_ENTRIES) {
-	if(cur->inum == -1) {
+	if(cur->inum == -1 /*|| cur->inum == 0*/) {
 	    strcpy(cur->name, name);
             cur->inum = inum;
 	    return cntr;
@@ -111,46 +122,6 @@ int directory_put(inode* dd, const char* name, int inum) {
     }
     return tryPg;
 }
-
-
-/* Now the directory can be left in a fragmented (ie. with gaps) state.
- * This is no longer needed.
- *
- *
-// This coallesces a directory's data page
-// That is, moves all data as far left as possible -> fills gaps, preserves order
-void coallesce_dir(inode* dd) {
-    int dataPgIdx = dd->ptrs[0];
-    void* dataPgPtr = pages_get_page(dataPgIdx);
-    dirent* cur = (dirent*)dataPgPtr;
-    dirent* emptySpot = NULL;
-    int cntr = 0;
-    while(cntr < 64) {
-        if(cur->inum == -1) {
-	    if(emptySpot == NULL) {
-		//found a gap
-	        emptySpot = cur;
-	    } else {
-		//we've reached the end and are done
-		//have an empty spot and cur (also empty) spot with nothing between
-		//invariant - delete 1 file at a time, at most one gap in dir
-		return;
-	    }
-	} else {
-            // if emptySpot == NULL: we haven't found a gap yet
-	    if(emptySpot != NULL) {
-		//found a entry and have an empty spot to put it in
-	        strncpy(emptySpot->name, cur->name, DIR_NAME);
-		emptySpot->inum = cur->inum;
-		//after the "move", we are left with a new empty spot here
-		emptySpot = cur;
-	    }
-	}
-	cur++;
-	cntr++;
-    }
-}*/
-
 
 int directory_delete_page(int dataPgIdx, const char* name) {
     //int dataPgIdx = dd->ptrs[0];
@@ -187,7 +158,8 @@ slist* directory_list_page(slist* list, int dataPgIdx) {
     dirent* cur = (dirent*)dataPgPtr;
     int cntr = 0;
     while(cntr < MAX_DIR_ENTRIES) {
-        if(cur->inum != -1) {
+        if(/*cur->inum != 0 && */cur->inum != -1) {
+	    printf("inum = %d . added |%s| to list\n", cur->inum, cur->name);
 	    list = s_cons(cur->name, list);
 	}
 	cntr++;
@@ -196,14 +168,22 @@ slist* directory_list_page(slist* list, int dataPgIdx) {
     return list;
 }
 
+
 // from https://www.tutorialspoint.com/c_standard_library/c_function_strtok.htm
+// This gets the inode of the last item in path
 inode* pathToDir(const char* path) {
-    slist* p = s_split(path, '/');//pathToSList(path);
+    slist* p = s_split(path, '/');
     inode* rootDir = (inode*)pages_get_page(1);
     inode* cur = rootDir;
     inode* prev = rootDir;
-    while(p != NULL && !streq(p->data, "")) {
+
+    if(streq(p->data, "")) {
+	p = p->next;
+    }
+    while(p != NULL) {
+	//printf("Looking for |%s|\n", p->data);
 	int dirIdx = directory_lookup(cur, p->data);
+	//printf("diridx -> %d\n", dirIdx);
 	void* dirData = NULL;
 	if(dirIdx < MAX_DIR_ENTRIES) {
 	    dirData = pages_get_page(cur->ptrs[0]);
@@ -211,16 +191,60 @@ inode* pathToDir(const char* path) {
 	    dirData = pages_get_page(cur->ptrs[1]);
 	}
 	dirent* curEntries = (dirent*)dirData;
+	//printf("found entry --- %s\n", curEntries[dirIdx].name);
 	int inodeNum = curEntries[dirIdx].inum;
+        //printf("inode = %d\n", inodeNum);
 	prev = cur;
 	cur = rootDir + inodeNum;
+	print_inode(cur);
+	//printf("cur = %p\n", cur);
+
+	p = p->next;
+    }
+    return cur;
+}
+
+
+//i know this is almost identical to above. just want to see if it works
+//abstraction later....
+//This function gets the inode the contains the last item
+inode* pathToLastItemContainer(const char* path) {
+    slist* p = s_split(path, '/');
+    inode* rootDir = (inode*)pages_get_page(1);
+    inode* cur = rootDir;
+    inode* prev = rootDir;
+
+    if(streq(p->data, "")) {
+	p = p->next;
+    }
+    while(p != NULL) {
+	//printf("Looking for |%s|\n", p->data);
+	int dirIdx = directory_lookup(cur, p->data);
+	//printf("diridx -> %d\n", dirIdx);
+	void* dirData = NULL;
+	if(dirIdx < MAX_DIR_ENTRIES) {
+	    dirData = pages_get_page(cur->ptrs[0]);
+	} else {
+	    dirData = pages_get_page(cur->ptrs[1]);
+	}
+	dirent* curEntries = (dirent*)dirData;
+	//printf("found entry --- %s\n", curEntries[dirIdx].name);
+	int inodeNum = curEntries[dirIdx].inum;
+        //printf("inode = %d\n", inodeNum);
+	prev = cur;
+	cur = rootDir + inodeNum;
+	print_inode(cur);
+	//printf("cur = %p\n", cur);
+
 	p = p->next;
     }
     return prev;
 }
 
+
 // Lists directory
 slist* directory_list(const char* path) {
+    //printf("making directory list for path: %s\n", path);
     inode* dirptr = pathToDir(path);
     //inode* dirptr = (inode*)pages_get_page(1);
     slist* out = NULL; //keep like this

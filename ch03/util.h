@@ -84,6 +84,4 @@ static char *getTextAfterLastSlash(const char *txt) {
     return out + 1;
 }
 
-
-
 #endif
