@@ -63,29 +63,23 @@ nufs_access(const char *path, int mask) {
 int
 nufs_getattr(const char *path, struct stat *st) {
     int rv = 0;
-    if (strcmp(path, "/") == 0) {
-        st->st_mode = 040755; // directory
-        st->st_size = 0;
-        st->st_uid = getuid();
-    } else {
-        inode *fptr = pathToINode(path);
+    inode *fptr = pathToINode(path);
 
-        if (fptr != NULL) {
-            st->st_dev = 1; //arbitrary
-            st->st_mode = fptr->mode;
-            st->st_nlink = 1; //not doing this yet
-            st->st_uid = getuid();
-            st->st_gid = getgid(); //group id
-            st->st_rdev = 0;
-            st->st_size = fptr->size;
-            st->st_blksize = 4096;
-            st->st_blocks = bytes_to_pages(fptr->size);
-            st->st_ctim = fptr->creation_time;
-            st->st_atim = fptr->last_view;
-            st->st_mtim = fptr->last_change;
-        } else {
-            rv = -ENOENT;
-        }
+    if (fptr != NULL) {
+        st->st_dev = 1; //arbitrary
+        st->st_mode = fptr->mode;
+        st->st_nlink = 1; //not doing this yet
+        st->st_uid = getuid();
+        st->st_gid = getgid(); //group id
+        st->st_rdev = 0;
+        st->st_size = fptr->size;
+        st->st_blksize = 4096;
+        st->st_blocks = bytes_to_pages(fptr->size);
+        st->st_ctim = fptr->creation_time;
+        st->st_atim = fptr->last_view;
+        st->st_mtim = fptr->last_change;
+    } else {
+        rv = -ENOENT;
     }
     printf("getattr(%s) -> (%d) {mode: %04o, size: %ld}\n", path, rv, st->st_mode, st->st_size);
     return rv;
@@ -96,6 +90,16 @@ nufs_getattr(const char *path, struct stat *st) {
 int
 nufs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
              off_t offset, struct fuse_file_info *fi) {
+    struct timespec ts;
+    int rv2 = clock_getres(CLOCK_REALTIME, &ts);
+
+    inode *node = pathToINode(path);
+    if (node == 0 || rv2 < 0) {
+        printf("readdir(%s) -> %d with clock restult %i and node result %i\n", path, -1, rv2, (int) node);
+        return -1;
+    }
+    node->last_view = ts;
+
     struct stat st;
     int rv;
     rv = nufs_getattr(path, &st);
@@ -113,7 +117,7 @@ nufs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     }
 
     printf("readdir(%s) -> %d\n", path, rv);
-    return 0;
+    return rv;
 }
 
 // mknod makes a filesystem object like a file or directory
@@ -130,6 +134,7 @@ nufs_mknod(const char *path, mode_t mode, dev_t rdev) {
         if (bit == 0) {
             struct timespec ts;
             rv = clock_getres(CLOCK_REALTIME, &ts);
+
             if (rv < 0) {
                 return -1;
             }
@@ -185,15 +190,23 @@ nufs_unlink(const char *path) {
     int rv = 0;
     //remove from directory entry
     inode *dirptr = (inode *) pages_get_page(1); //root dir in inode 0
+    struct timespec ts;
+    int rv2 = clock_getres(CLOCK_REALTIME, &ts);
+    dirptr->last_change = ts;
+
 
     int inodeNum = directory_delete(dirptr, (path + 1)); //strip leading /
     assert(inodeNum >= 0);
 
     inode *fileptr = get_inode(inodeNum);
+    fileptr->last_change = ts;
+
     //assume files are only 1 page of data
     if (fileptr->size > 0) {
         free_page(fileptr->ptrs[0]);
     }
+
+
     bitmap_put(get_inode_bitmap(), inodeNum, 0);
 
     printf("unlink(%s) -> %d\n", path, rv);
@@ -218,9 +231,17 @@ nufs_rmdir(const char *path) {
 // called to move a file within the same filesystem
 int
 nufs_rename(const char *from, const char *to) {
+    struct timespec ts;
+    int rv2 = clock_getres(CLOCK_REALTIME, &ts);
+    if (rv2 < 0) {
+        return -1;
+    }
     int rv = -1;
     void *inodes = pages_get_page(1);
     inode *dirInode = (inode *) inodes;
+    dirInode->last_view = ts;
+    dirInode->last_change = ts;
+
     dirent *dirEntries = (dirent *) pages_get_page(dirInode->ptrs[0]);
 
     int idx = directory_lookup(dirInode, (from + 1)); //first inode is /
@@ -231,20 +252,86 @@ nufs_rename(const char *from, const char *to) {
         rv = 0;
     }
 
+
     printf("rename(%s => %s) -> %d\n", from, to, rv);
     return rv;
 }
 
 int
 nufs_chmod(const char *path, mode_t mode) {
-    int rv = -1;
+    struct timespec ts;
+    int rv2 = clock_getres(CLOCK_REALTIME, &ts);
+    if (rv2 < 0) {
+        return -1;
+    }
+
+    inode *node = pathToINode(path);
+    node->mode = mode;
+    node->last_change = ts;
+    int rv = 0;
     printf("chmod(%s, %04o) -> %d\n", path, mode, rv);
     return rv;
 }
 
+size_t PAGE_SIZE = 4096;
+
 int
 nufs_truncate(const char *path, off_t size) {
-    int rv = -1;
+    struct timespec ts;
+    int rv2 = clock_getres(CLOCK_REALTIME, &ts);
+    if (rv2 < 0) {
+        return -1;
+    }
+    inode *fptr = pathToINode(path);
+    fptr->last_change = ts;
+
+    size_t curr_size = fptr->size;
+
+    int numPages = curr_size / size;
+    while (numPages > 0) {
+        //UPDATE THE SIZE
+        if (numPages == 1) {//numPages == 1) {
+            void *pg = pages_get_page(fptr->ptrs[0]);
+            memset(pg, 0, PAGE_SIZE);//sizeLeft);
+            free_page(fptr->ptrs[0]);
+            fptr->ptrs[0] = 0;
+            fptr->size -= size;
+
+        } else if (numPages == 2) {//numPages == 2) {
+            void *pg = pages_get_page(fptr->ptrs[1]);
+            memset(pg, 0, PAGE_SIZE);//sizeLeft);
+            free_page(fptr->ptrs[1]);
+            fptr->ptrs[1] = 0;
+            fptr->size -= size;
+        } else {
+            int indirectPoints = fptr->iptr;
+            int *indirectPage = pages_get_page(indirectPoints);
+
+            int index = -1;
+            void *curr_index_pointer = indirectPage + index;
+            while (curr_index_pointer != 0) {
+                index++;
+                curr_index_pointer = indirectPage + index;
+            }
+            indirectPage = pages_get_page(indirectPoints);
+
+            while (index >= 0) {
+                int *currPointer = indirectPage + index;
+                int currPAge = *(currPointer);
+                void *pg = pages_get_page(currPAge);
+                memset(pg, 0, PAGE_SIZE);//sizeLeft);
+                free_page(currPAge);
+                memset(currPointer, 0, sizeof(int));//sizeLeft);
+                fptr->size -= size;
+                index--;
+            }
+        }
+
+        numPages--;
+    }
+
+    fptr->size = size;
+    int rv = 0;
     printf("truncate(%s, %ld bytes) -> %d\n", path, size, rv);
     return rv;
 }
@@ -254,6 +341,15 @@ nufs_truncate(const char *path, off_t size) {
 // open files.
 int
 nufs_open(const char *path, struct fuse_file_info *fi) {
+    struct timespec ts;
+    int rv2 = clock_getres(CLOCK_REALTIME, &ts);
+    if (rv2 < 0) {
+        return -1;
+    }
+
+    inode *node = pathToINode(path);
+    node->last_view = ts;
+
     int rv = 0;
     printf("open(%s) -> %d\n", path, rv);
     return rv;
@@ -424,11 +520,19 @@ nufs_write(const char *path, const char *buf, size_t size, off_t offset, struct 
     inode *fptr = pathToINode(path);
     if (fptr != NULL) {
         //currently assume just writing 1 page or less
-        fptr->refs = 1; //todo this is almost certainly wrong
         //mode is set in mknod
         //fptr->size = size;
 
+        struct timespec ts;
+        rv = clock_getres(CLOCK_REALTIME, &ts);
+        if (rv < 0) {
+            return -1;
+        }
+
         rv = write_pages(fptr, buf, size, offset);
+
+
+        fptr->last_change = ts;
 
         //assert the copy didn't fail?
         //rv = size;

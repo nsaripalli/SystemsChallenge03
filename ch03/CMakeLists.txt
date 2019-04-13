@@ -10,12 +10,15 @@ include(FindPkgConfig)
 add_executable(SystemsChallenge03
         bitmap.c
         directory.h
+        directory.c
         inode.h
+        inode.c
         pages.c
         pages.h
         slist.c
         slist.h
         storage.h
+        storage.c
         util.h
         Makefile
         nufs.c

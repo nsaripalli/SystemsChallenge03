@@ -21,51 +21,63 @@
 
 static const int MAX_DIR_ENTRIES = 4096 / sizeof(dirent);
 
+
 void directory_init() {
-    inode* inodes = (inode*)pages_get_page(1);
-    if(inodes[0].refs == 1) {
-        //puts("directory already init'd");
-	return;
+    inode *inodes = (inode *) pages_get_page(1);
+    if (inodes[0].refs == 1) {
+//        puts("directory already init'd");
+        return;
     }
-    
+
+    struct timespec ts;
+    int rv = clock_getres(CLOCK_REALTIME, &ts);
+
+    if (rv < 0) {
+        return;
+    }
+
     inodes[0].refs = 1;
     inodes[0].mode = 040755;
     inodes[0].size = 4096;
     inodes[0].ptrs[0] = alloc_page();
     inodes[0].ptrs[1] = 0;
     inodes[0].iptr = 0;
+    inodes[0].last_change = ts;
+    inodes[0].last_view = ts;
+    inodes[0].creation_time = ts;
+
 
     bitmap_put(get_inode_bitmap(), 0, 1);
     bitmap_put(get_pages_bitmap(), inodes[0].ptrs[0], 1);
 
     // mark all entries in this directory as empty/unset
-    void* datapg = pages_get_page(inodes[0].ptrs[0]);
-    dirent* cur = (dirent*)datapg;
-    for(int i = 0; i < MAX_DIR_ENTRIES; ++i) {
-	cur[i].inum = -1;
+    void *datapg = pages_get_page(inodes[0].ptrs[0]);
+    dirent *cur = (dirent *) datapg;
+    for (int i = 0; i < MAX_DIR_ENTRIES; ++i) {
+        cur[i].inum = -1;
     }
 }
 
-int directory_lookup_page(void* entryPage, const char* name) {
-    dirent* cur = (dirent*)entryPage;
+int directory_lookup_page(void *entryPage, const char *name) {
+    dirent *cur = (dirent *) entryPage;
     int cntr = 0;
-    while(cntr < MAX_DIR_ENTRIES) {
-        if(cur->inum != -1 && streq(cur->name, name)) {
-	    return cntr;
-	}
-	cur++;
-	cntr++;
+    while (cntr < MAX_DIR_ENTRIES) {
+        if (cur->inum != -1 && streq(cur->name, name)) {
+            return cntr;
+        }
+        cur++;
+        cntr++;
     }
     return -1;
 }
 
 // Returns the index in the directory
-int directory_lookup(inode* dd, const char* name) {
+int directory_lookup(inode *dd, const char *name) {
     // Look in first direct page
     int pgRes = directory_lookup_page(pages_get_page(dd->ptrs[0]), name);
-    if(pgRes == -1 && dd->size >= (4096 * 2)) {
+    if (pgRes == -1 && dd->size >= (4096 * 2)) {
         //Didn't find in first direct page, check second
-	pgRes = directory_lookup_page(pages_get_page(dd->ptrs[1]), name);
+        pgRes = directory_lookup_page(pages_get_page(dd->ptrs[1]), name);
     }
     return pgRes;
 }
@@ -92,60 +104,62 @@ int directory_lookup_inode(inode* dd, const char* name) {
 //int tree_lookup(const char* path);
 
 
-int directory_put_page(int dataPgIdx, const char* name, int inum) {
-    void* dataPgPtr = pages_get_page(dataPgIdx);
-    dirent* cur = (dirent*)dataPgPtr;
+int directory_put_page(int dataPgIdx, const char *name, int inum) {
+    void *dataPgPtr = pages_get_page(dataPgIdx);
+    dirent *cur = (dirent *) dataPgPtr;
     int cntr = 0;
     int spotFound = 0;
-    while(cntr < MAX_DIR_ENTRIES) {
-	if(cur->inum == -1 /*|| cur->inum == 0*/) {
-	    strcpy(cur->name, name);
+    while (cntr < MAX_DIR_ENTRIES) {
+        if (cur->inum == -1 /*|| cur->inum == 0*/) {
+            strcpy(cur->name, name);
             cur->inum = inum;
-	    return cntr;
-	}
-	cur++;
-	cntr++;
+            return cntr;
+        }
+        cur++;
+        cntr++;
     }
     return -1;
 }
 
 // Returns the index where we put it in the directory
-int directory_put(inode* dd, const char* name, int inum) {
+int directory_put(inode *dd, const char *name, int inum) {
     int tryPg = directory_put_page(dd->ptrs[0], name, inum);
-    if(tryPg == -1 && dd->size >= (4096 * 2)) {
+    if (tryPg == -1 && dd->size >= (4096 * 2)) {
         tryPg = directory_put_page(dd->ptrs[1], name, inum);
-	if(tryPg == -1) {
-	    return -1;
-	} else {
-	    return MAX_DIR_ENTRIES + tryPg;
-	}
+        if (tryPg == -1) {
+            return -1;
+        } else {
+            return MAX_DIR_ENTRIES + tryPg;
+        }
     }
     return tryPg;
 }
 
-int directory_delete_page(int dataPgIdx, const char* name) {
+int directory_delete_page(int dataPgIdx, const char *name) {
     //int dataPgIdx = dd->ptrs[0];
-    void* dataPgPtr = pages_get_page(dataPgIdx);
-    dirent* cur = (dirent*)dataPgPtr;
+    void *dataPgPtr = pages_get_page(dataPgIdx);
+    dirent *cur = (dirent *) dataPgPtr;
     int oldINum = -1;
     int cntr = 0;
-    while(cntr < MAX_DIR_ENTRIES ) {
-        if(cur->inum != -1 && streq(cur->name, name)) {
+    while (cntr < MAX_DIR_ENTRIES) {
+        if (cur->inum != -1 && streq(cur->name, name)) {
             oldINum = cur->inum;
-	    cur->inum = -1;
-	    break;
-	}
-	cur++;
-	cntr++;
+            cur->inum = -1;
+            break;
+        }
+        cur++;
+        cntr++;
     }
     return oldINum;
 }
 
 // delete the corresponding entry (no leading /) from the directory datapage
 // returns the inode number. -1 if wasn't found
-int directory_delete(inode* dd, const char* name) {
+int directory_delete(inode *dd, const char *name) {
+    int PAGE_SIZE = 4096;
+
     int tryPg1 = directory_delete_page(dd->ptrs[0], name);
-    if(tryPg1 == -1 && dd->size >= (4096 * 2)) {
+    if (tryPg1 == -1 && dd->size >= (PAGE_SIZE * 2)) {
         return directory_delete_page(dd->ptrs[1], name);
     }
     return tryPg1;
@@ -153,17 +167,17 @@ int directory_delete(inode* dd, const char* name) {
 
 
 // Adds to input slist* the list for the given dir page
-slist* directory_list_page(slist* list, int dataPgIdx) {
-    void* dataPgPtr = pages_get_page(dataPgIdx);
-    dirent* cur = (dirent*)dataPgPtr;
+slist *directory_list_page(slist *list, int dataPgIdx) {
+    void *dataPgPtr = pages_get_page(dataPgIdx);
+    dirent *cur = (dirent *) dataPgPtr;
     int cntr = 0;
-    while(cntr < MAX_DIR_ENTRIES) {
-        if(/*cur->inum != 0 && */cur->inum != -1) {
+    while (cntr < MAX_DIR_ENTRIES) {
+        if (/*cur->inum != 0 && */cur->inum != -1) {
 	    printf("inum = %d . added |%s| to list\n", cur->inum, cur->name);
-	    list = s_cons(cur->name, list);
-	}
-	cntr++;
-	cur++;
+            list = s_cons(cur->name, list);
+        }
+        cntr++;
+        cur++;
     }
     return list;
 }
@@ -178,28 +192,28 @@ inode* pathToDir(const char* path) {
     inode* prev = rootDir;
 
     if(streq(p->data, "")) {
-	p = p->next;
+        p = p->next;
     }
     while(p != NULL) {
-	//printf("Looking for |%s|\n", p->data);
-	int dirIdx = directory_lookup(cur, p->data);
-	//printf("diridx -> %d\n", dirIdx);
-	void* dirData = NULL;
-	if(dirIdx < MAX_DIR_ENTRIES) {
-	    dirData = pages_get_page(cur->ptrs[0]);
-	} else {
-	    dirData = pages_get_page(cur->ptrs[1]);
-	}
-	dirent* curEntries = (dirent*)dirData;
-	//printf("found entry --- %s\n", curEntries[dirIdx].name);
-	int inodeNum = curEntries[dirIdx].inum;
+        //printf("Looking for |%s|\n", p->data);
+        int dirIdx = directory_lookup(cur, p->data);
+        //printf("diridx -> %d\n", dirIdx);
+        void* dirData = NULL;
+        if(dirIdx < MAX_DIR_ENTRIES) {
+            dirData = pages_get_page(cur->ptrs[0]);
+        } else {
+            dirData = pages_get_page(cur->ptrs[1]);
+        }
+        dirent* curEntries = (dirent*)dirData;
+        //printf("found entry --- %s\n", curEntries[dirIdx].name);
+        int inodeNum = curEntries[dirIdx].inum;
         //printf("inode = %d\n", inodeNum);
-	prev = cur;
-	cur = rootDir + inodeNum;
-	print_inode(cur);
-	//printf("cur = %p\n", cur);
+        prev = cur;
+        cur = rootDir + inodeNum;
+        print_inode(cur);
+        //printf("cur = %p\n", cur);
 
-	p = p->next;
+        p = p->next;
     }
     return cur;
 }
@@ -215,41 +229,41 @@ inode* pathToLastItemContainer(const char* path) {
     inode* prev = rootDir;
 
     if(streq(p->data, "")) {
-	p = p->next;
+        p = p->next;
     }
     while(p != NULL) {
-	//printf("Looking for |%s|\n", p->data);
-	int dirIdx = directory_lookup(cur, p->data);
-	//printf("diridx -> %d\n", dirIdx);
-	void* dirData = NULL;
-	if(dirIdx < MAX_DIR_ENTRIES) {
-	    dirData = pages_get_page(cur->ptrs[0]);
-	} else {
-	    dirData = pages_get_page(cur->ptrs[1]);
-	}
-	dirent* curEntries = (dirent*)dirData;
-	//printf("found entry --- %s\n", curEntries[dirIdx].name);
-	int inodeNum = curEntries[dirIdx].inum;
+        //printf("Looking for |%s|\n", p->data);
+        int dirIdx = directory_lookup(cur, p->data);
+        //printf("diridx -> %d\n", dirIdx);
+        void* dirData = NULL;
+        if(dirIdx < MAX_DIR_ENTRIES) {
+            dirData = pages_get_page(cur->ptrs[0]);
+        } else {
+            dirData = pages_get_page(cur->ptrs[1]);
+        }
+        dirent* curEntries = (dirent*)dirData;
+        //printf("found entry --- %s\n", curEntries[dirIdx].name);
+        int inodeNum = curEntries[dirIdx].inum;
         //printf("inode = %d\n", inodeNum);
-	prev = cur;
-	cur = rootDir + inodeNum;
-	print_inode(cur);
-	//printf("cur = %p\n", cur);
+        prev = cur;
+        cur = rootDir + inodeNum;
+        print_inode(cur);
+        //printf("cur = %p\n", cur);
 
-	p = p->next;
+        p = p->next;
     }
     return prev;
 }
 
 
 // Lists directory
-slist* directory_list(const char* path) {
+slist *directory_list(const char *path) {
     //printf("making directory list for path: %s\n", path);
-    inode* dirptr = pathToDir(path);
+    inode *dirptr = pathToDir(path);
     //inode* dirptr = (inode*)pages_get_page(1);
-    slist* out = NULL; //keep like this
+    slist *out = NULL; //keep like this
     out = directory_list_page(out, dirptr->ptrs[0]);
-    if(dirptr->size >= (2 * 4096)) {
+    if (dirptr->size >= (2 * 4096)) {
         out = directory_list_page(out, dirptr->ptrs[1]);
     }
     return out;
