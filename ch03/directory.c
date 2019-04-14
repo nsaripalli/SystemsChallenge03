@@ -124,6 +124,10 @@ int directory_put_page(int dataPgIdx, const char *name, int inum) {
 // Returns the index where we put it in the directory
 int directory_put(inode *dd, const char *name, int inum) {
     int tryPg = directory_put_page(dd->ptrs[0], name, inum);
+    if (tryPg == -1 && dd->size <= 4096) {
+	dd->ptrs[1] == alloc_page();
+	dd->size += 4096;
+    }
     if (tryPg == -1 && dd->size >= (4096 * 2)) {
         tryPg = directory_put_page(dd->ptrs[1], name, inum);
         if (tryPg == -1) {
@@ -136,7 +140,6 @@ int directory_put(inode *dd, const char *name, int inum) {
 }
 
 int directory_delete_page(int dataPgIdx, const char *name) {
-    //int dataPgIdx = dd->ptrs[0];
     void *dataPgPtr = pages_get_page(dataPgIdx);
     dirent *cur = (dirent *) dataPgPtr;
     int oldINum = -1;
@@ -197,7 +200,6 @@ inode* pathToDir(const char* path) {
     while(p != NULL) {
         //printf("Looking for |%s|\n", p->data);
         int dirIdx = directory_lookup(cur, p->data);
-        //printf("diridx -> %d\n", dirIdx);
         void* dirData = NULL;
         if(dirIdx < MAX_DIR_ENTRIES) {
             dirData = pages_get_page(cur->ptrs[0]);
@@ -207,12 +209,9 @@ inode* pathToDir(const char* path) {
         dirent* curEntries = (dirent*)dirData;
         //printf("found entry --- %s\n", curEntries[dirIdx].name);
         int inodeNum = curEntries[dirIdx].inum;
-        //printf("inode = %d\n", inodeNum);
         prev = cur;
         cur = rootDir + inodeNum;
         print_inode(cur);
-        //printf("cur = %p\n", cur);
-
         p = p->next;
     }
     return cur;
@@ -234,7 +233,6 @@ inode* pathToLastItemContainer(const char* path) {
     while(p != NULL) {
         //printf("Looking for |%s|\n", p->data);
         int dirIdx = directory_lookup(cur, p->data);
-        //printf("diridx -> %d\n", dirIdx);
         void* dirData = NULL;
         if(dirIdx < MAX_DIR_ENTRIES) {
             dirData = pages_get_page(cur->ptrs[0]);
@@ -244,12 +242,9 @@ inode* pathToLastItemContainer(const char* path) {
         dirent* curEntries = (dirent*)dirData;
         //printf("found entry --- %s\n", curEntries[dirIdx].name);
         int inodeNum = curEntries[dirIdx].inum;
-        //printf("inode = %d\n", inodeNum);
         prev = cur;
         cur = rootDir + inodeNum;
         print_inode(cur);
-        //printf("cur = %p\n", cur);
-
         p = p->next;
     }
     return prev;
