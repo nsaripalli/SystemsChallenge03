@@ -7,7 +7,7 @@ CFLAGS := -g `pkg-config fuse --cflags`
 LDLIBS := `pkg-config fuse --libs`
 
 nufs: $(OBJS)
-	gcc $(CLFAGS) -o $@ $^ $(LDLIBS)
+	gcc $(CLFAGS) -o $@ $^ $(LDLIBS) -lrt
 
 %.o: %.c $(HDRS)
 	gcc $(CFLAGS) -c -o $@ $<
@@ -17,18 +17,17 @@ clean: unmount
 	rmdir mnt || true
 
 mount: nufs
+	make clean
+	make nufs
 	mkdir -p mnt || true
 	./nufs -s -f mnt data.nufs
 
 unmount:
 	fusermount -u mnt || true
 
+
 test: nufs
 	perl test.pl
-
-
-test2: nufs
-	perl test2.pl
 
 gdb: nufs
 	mkdir -p mnt || true

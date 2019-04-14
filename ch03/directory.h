@@ -9,6 +9,8 @@
 #include "pages.h"
 #include "inode.h"
 
+//Union data type for dirent or even include it in dirent? Hard code in file path and the symbolic links are referenced, then
+
 typedef struct dirent {
     char name[DIR_NAME];
     int  inum;
