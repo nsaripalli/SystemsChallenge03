@@ -143,7 +143,7 @@ nufs_mknod(const char *path, mode_t mode, dev_t rdev) {
     }
 
     inodes->last_change = ts;
-    printf("current time is %li %li ", ts.tv_sec, ts.tv_sec);
+    printf("current time is %li %li \n", ts.tv_sec, ts.tv_sec);
 
     void *inodeBitmap = get_inode_bitmap();
 
@@ -177,8 +177,12 @@ nufs_mknod(const char *path, mode_t mode, dev_t rdev) {
         i++;
         bit = bitmap_get(inodeBitmap, i);
     }
-    assert(i != NUM_INODES);
-    printf("mknod(%s, %04o) -> %d\n", path, mode, rv);\
+    if (i == NUM_INODES) {
+        puts("MKNOD FAILED");
+        printf("mknod(%s, %04o) -> %d\n", path, mode, -1);
+        return -1;
+    }
+    printf("mknod(%s, %04o) -> %d\n", path, mode, rv);
     fflush(stdout);
     return rv;
 }
@@ -355,48 +359,78 @@ nufs_truncate(const char *path, off_t size) {
     fptr->last_change = ts;
 
     size_t curr_size = fptr->size;
+    int numPages = bytes_to_pages(size);
+    int pagesToRemove = numPages = bytes_to_pages(curr_size);
+    int sizeToRemove = curr_size - size;
 
-    int numPages = curr_size / size;
-    while (numPages > 0) {
+    while (pagesToRemove > 0) {
         //UPDATE THE SIZE
         if (numPages == 1) {//numPages == 1) {
             void *pg = pages_get_page(fptr->ptrs[0]);
-            memset(pg, 0, PAGE_SIZE);//sizeLeft);
-            free_page(fptr->ptrs[0]);
-            fptr->ptrs[0] = 0;
-            fptr->size -= size;
+
+            long currSizeToRemove = min(sizeToRemove, PAGE_SIZE);
+
+            memset(pg + PAGE_SIZE - currSizeToRemove, 0, currSizeToRemove);//sizeLeft);
+
+            if (currSizeToRemove == PAGE_SIZE) {
+                free_page(fptr->ptrs[0]);
+                fptr->ptrs[0] = 0;
+            }
+
+            fptr->size -= currSizeToRemove;
 
         } else if (numPages == 2) {//numPages == 2) {
             void *pg = pages_get_page(fptr->ptrs[1]);
-            memset(pg, 0, PAGE_SIZE);//sizeLeft);
-            free_page(fptr->ptrs[1]);
-            fptr->ptrs[1] = 0;
-            fptr->size -= size;
+
+            long currSizeToRemove = min(sizeToRemove, PAGE_SIZE);
+
+
+            memset(pg + PAGE_SIZE - currSizeToRemove, 0, currSizeToRemove);//sizeLeft);
+
+            if (currSizeToRemove == PAGE_SIZE) {
+                free_page(fptr->ptrs[1]);
+                fptr->ptrs[1] = 0;
+            }
+
+            fptr->size -= currSizeToRemove;
         } else {
             int indirectPoints = fptr->iptr;
             int *indirectPage = pages_get_page(indirectPoints);
 
-            int index = -1;
-            void *curr_index_pointer = indirectPage + index;
-            while (curr_index_pointer != 0) {
-                index++;
-                curr_index_pointer = indirectPage + index;
+            if (indirectPage == 0) {
+                perror("Page lookup failed");
+                return -1;
             }
+
+            void *curr_index_pointer = indirectPage;
+            int index = 0;
+            while (curr_index_pointer != 0) {
+                curr_index_pointer = indirectPage + index;
+                index++;
+            }
+            index--;
+
+            //TODO WHAT IS HAPPENING HERE
             indirectPage = pages_get_page(indirectPoints);
 
-            while (index >= 0) {
-                int *currPointer = indirectPage + index;
-                int currPAge = *(currPointer);
-                void *pg = pages_get_page(currPAge);
-                memset(pg, 0, PAGE_SIZE);//sizeLeft);
+            int *currPointer = indirectPage + index;
+            int currPAge = *(currPointer);
+            void *pg = pages_get_page(currPAge);
+
+            long currSizeToRemove = min(sizeToRemove, PAGE_SIZE);
+
+            memset(pg + PAGE_SIZE - currSizeToRemove, 0, currSizeToRemove);//sizeLeft);
+
+            if (currSizeToRemove == PAGE_SIZE) {
                 free_page(currPAge);
                 memset(currPointer, 0, sizeof(int));//sizeLeft);
-                fptr->size -= size;
-                index--;
             }
+
+            fptr->size -= currSizeToRemove;
         }
 
         numPages--;
+        pagesToRemove--;
     }
 
     fptr->size = size;
