@@ -42,9 +42,9 @@ void directory_init() {
     inodes[0].ptrs[0] = alloc_page();
     inodes[0].ptrs[1] = 0;
     inodes[0].iptr = 0;
-    inodes[0].last_change = ts;
-    inodes[0].last_view = ts;
-    inodes[0].creation_time = ts;
+    inodes[0].last_change = ts.tv_sec;
+    inodes[0].last_view = ts.tv_sec;
+    inodes[0].creation_time = ts.tv_sec;
 
 
     bitmap_put(get_inode_bitmap(), 0, 1);
@@ -78,6 +78,9 @@ int directory_lookup(inode *dd, const char *name) {
     if (pgRes == -1 && dd->size >= (4096 * 2)) {
         //Didn't find in first direct page, check second
         pgRes = directory_lookup_page(pages_get_page(dd->ptrs[1]), name);
+	if(pgRes != -1) {
+		return MAX_DIR_ENTRIES + pgRes;
+	}
     }
     return pgRes;
 }
@@ -124,8 +127,17 @@ int directory_put_page(int dataPgIdx, const char *name, int inum) {
 // Returns the index where we put it in the directory
 int directory_put(inode *dd, const char *name, int inum) {
     int tryPg = directory_put_page(dd->ptrs[0], name, inum);
-    if (tryPg == -1 && dd->size <= 4096) {
-	dd->ptrs[1] == alloc_page();
+    if (tryPg == -1 && dd->size <= 4096  /*&& dd->ptrs[1]==0*/) { //this was a ?
+	dd->ptrs[1] = alloc_page();
+
+	    // mark all entries in this directory as empty/unset
+   	 void *datapg = pages_get_page(dd->ptrs[1]);
+    	dirent *cur = (dirent *) datapg;
+   	 for (int i = 0; i < MAX_DIR_ENTRIES; ++i) {
+   	     cur[i].inum = -1;
+   	 }
+
+	
 	dd->size += 4096;
     }
     if (tryPg == -1 && dd->size >= (4096 * 2)) {
@@ -205,12 +217,13 @@ inode* pathToDir(const char* path) {
             dirData = pages_get_page(cur->ptrs[0]);
         } else {
             dirData = pages_get_page(cur->ptrs[1]);
+	    dirIdx -= MAX_DIR_ENTRIES; //indx in 2nd pg
         }
         dirent* curEntries = (dirent*)dirData;
         //printf("found entry --- %s\n", curEntries[dirIdx].name);
         int inodeNum = curEntries[dirIdx].inum;
         prev = cur;
-        cur = rootDir + inodeNum;
+        cur = /*rootDir*/ ((inode*)pages_get_page(1)) + inodeNum; // use the inode page!
         print_inode(cur);
         p = p->next;
     }
@@ -238,12 +251,13 @@ inode* pathToLastItemContainer(const char* path) {
             dirData = pages_get_page(cur->ptrs[0]);
         } else {
             dirData = pages_get_page(cur->ptrs[1]);
+	    dirIdx -= MAX_DIR_ENTRIES; //indx in 2nd pg
         }
         dirent* curEntries = (dirent*)dirData;
         //printf("found entry --- %s\n", curEntries[dirIdx].name);
         int inodeNum = curEntries[dirIdx].inum;
         prev = cur;
-        cur = rootDir + inodeNum;
+        cur = /*rootDir*/ ((inode*)pages_get_page(1)) + inodeNum; //use inode page
         print_inode(cur);
         p = p->next;
     }
