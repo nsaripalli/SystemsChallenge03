@@ -95,7 +95,7 @@ nufs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 
     inode *node = pathToINode(path);
     if (node == 0 || rv2 < 0) {
-        printf("readdir(%s) -> %d with clock restult %i and node result %i\n", path, -1, rv2, (int) node);
+        printf("readdir(%s) -> %d with clock result %i and node result %p\n", path, -1, rv2, node);
         return -1;
     }
     node->last_view = ts;
@@ -177,6 +177,7 @@ nufs_mknod(const char *path, mode_t mode, dev_t rdev) {
         i++;
         bit = bitmap_get(inodeBitmap, i);
     }
+    assert(i != NUM_INODES);
     printf("mknod(%s, %04o) -> %d\n", path, mode, rv);\
     fflush(stdout);
     return rv;
@@ -201,30 +202,40 @@ nufs_mkdir(const char *path, mode_t mode) {
     return rv;
 }
 
+void clear_file(inode* file) {
+    //assume files are only 1 page of data
+    //todo this needs to be removed, and this has to delete all the
+    //   contents of the file (Depending on file size)
+    if (file->size > 0) {
+        free_page(file->ptrs[0]);
+    }
+}
+
+
+
 int
 nufs_unlink(const char *path) {
     int rv = 0;
-    //remove from directory entry
-    inode *dirPtr = pathToLastItemContainer(path);
+
+    inode* dirPtr = pathToLastItemContainer(path);
     struct timespec ts;
-    int rv2 = clock_gettime(CLOCK_REALTIME, &ts);
+    int rv2 = clock_getres(CLOCK_REALTIME, &ts);
     dirPtr->last_change = ts;
 
-    char *fileName = getTextAfterLastSlash(path);
-    int inodeNum = directory_delete(dirPtr, fileName);
+    char* fileName = getTextAfterLastSlash(path);
+    int inodeNum = directory_lookup_inode(dirPtr, fileName);
+    //int inodeNum = directory_delete(dirPtr, fileName);
     assert(inodeNum >= 0);
 
     inode *fileptr = get_inode(inodeNum);
     fileptr->last_change = ts;
 
-    //assume files are only 1 page of data
-    //todo this needs to be removed
-    if (fileptr->size > 0) {
-        free_page(fileptr->ptrs[0]);
-    }
-
-
+    // Decrement ref counter
+    // If ref counter == 0 {
+    directory_delete(dirPtr, fileName);
+    clear_file(fileptr);
     bitmap_put(get_inode_bitmap(), inodeNum, 0);
+    // }
 
     printf("unlink(%s) -> %d\n", path, rv);
     return rv;
@@ -237,9 +248,16 @@ nufs_link(const char *from, const char *to) {
     return rv;
 }
 
+//note this is only called by nufs when directory is empty
 int
 nufs_rmdir(const char *path) {
     int rv = -1;
+    //todo check if its a directory
+    slist* contents = directory_list(path);
+    if (contents != NULL) {
+	return -1;
+    }
+    rv = nufs_unlink(path);
     printf("rmdir(%s) -> %d\n", path, rv);
     return rv;
 }
@@ -289,7 +307,7 @@ nufs_rename(const char *from, const char *to) {
         puts("Rename - directory_delete failed");
         return -1;
     }
-    directory_put(dirInodeTo, fileNameTo, fromINode);
+    rv = directory_put(dirInodeTo, fileNameTo, fromINode);
     if (rv < 0) {
         puts("Rename - directory_put failed");
         return -1;
