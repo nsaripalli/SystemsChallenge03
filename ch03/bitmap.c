@@ -37,7 +37,7 @@ int bitmap_get(void* bm, int ii) {
 
 void bitmap_put(void* bm, int ii, int vv) {
     assert(vv == 0 || vv == 1);
-    long* cur = (long*)(bm + (ii/64));
+    unsigned long* cur = (long*)(bm + ((ii/64) * sizeof(unsigned long)));
     long leftOffsetBits = ii % (8*sizeof(long));
     long shiftLenBits = (8*sizeof(long)) - (leftOffsetBits + 1);
     unsigned long mask = 1UL << shiftLenBits;

@@ -48,7 +48,7 @@ pages_init(const char *path) {
     //page 1 is inode array
     bitmap_put(pbm, 1, 1);
 
-    //page 2 is root page
+    //page 2 is more inode array
     bitmap_put(pbm, 2, 1);
 }
 

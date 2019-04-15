@@ -20,7 +20,7 @@
 #include "bitmap.h"
 #include "directory.h"
 
-static const int NUM_INODES = 4096 / sizeof(inode);
+static const int NUM_INODES = (2 * 4096) / sizeof(inode);
 
 // Get the inode* at path, else NULL
 // Starts from /
@@ -35,11 +35,13 @@ inode *pathToINode(const char *path) {
     //printf("pathToINode ------ looking for %s\n", filename);
     if (dirIdx == -1) {
         //not found in directory
-        //puts("not found in dir");
+        puts("not found in dir");
         return NULL;
     }
-    dirent *dirData = (dirent *) pages_get_page(dirnode->ptrs[0]);
-    int inum = dirData[dirIdx].inum;
+   
+    //dirent *dirData = (dirent *) pages_get_page(dirnode->ptrs[0]);
+    //int inum = dirData[dirIdx].inum;
+    int inum = directory_lookup_inode(dirnode, filename);
     return get_inode(inum);
 }
 
@@ -75,9 +77,9 @@ nufs_getattr(const char *path, struct stat *st) {
         st->st_size = fptr->size;
         st->st_blksize = 4096;
         st->st_blocks = bytes_to_pages(fptr->size);
-        st->st_ctim = fptr->creation_time;
-        st->st_atim = fptr->last_view;
-        st->st_mtim = fptr->last_change;
+        st->st_ctime = fptr->creation_time;
+        st->st_atime = fptr->last_view;
+        st->st_mtime = fptr->last_change;
     } else {
         rv = -ENOENT;
     }
@@ -98,7 +100,7 @@ nufs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
         printf("readdir(%s) -> %d with clock result %i and node result %p\n", path, -1, rv2, node);
         return -1;
     }
-    node->last_view = ts;
+    node->last_view = ts.tv_sec;
 
     struct stat st;
     int rv;
@@ -142,7 +144,7 @@ nufs_mknod(const char *path, mode_t mode, dev_t rdev) {
         return -1;
     }
 
-    inodes->last_change = ts;
+    inodes->last_change = ts.tv_sec;
     printf("current time is %li %li \n", ts.tv_sec, ts.tv_sec);
 
     void *inodeBitmap = get_inode_bitmap();
@@ -160,9 +162,9 @@ nufs_mknod(const char *path, mode_t mode, dev_t rdev) {
             inodes[i].ptrs[0] = 0;
             inodes[i].ptrs[1] = 0;
             inodes[i].iptr = 0;
-            inodes[i].creation_time = ts;
-            inodes[i].last_change = ts;
-            inodes[i].last_view = ts;
+            inodes[i].creation_time = ts.tv_sec;
+            inodes[i].last_change = ts.tv_sec;
+            inodes[i].last_view = ts.tv_sec;
 
             rv = 0;
             bitmap_put(inodeBitmap, i, 1);
@@ -223,7 +225,7 @@ nufs_unlink(const char *path) {
     inode *dirPtr = pathToLastItemContainer(path);
     struct timespec ts;
     int rv2 = clock_getres(CLOCK_REALTIME, &ts);
-    dirPtr->last_change = ts;
+    dirPtr->last_change = ts.tv_sec;
 
     char *fileName = getTextAfterLastSlash(path);
     int inodeNum = directory_lookup_inode(dirPtr, fileName);
@@ -231,7 +233,7 @@ nufs_unlink(const char *path) {
     assert(inodeNum >= 0);
 
     inode *fileptr = get_inode(inodeNum);
-    fileptr->last_change = ts;
+    fileptr->last_change = ts.tv_sec;
 
     // Decrement ref counter
     // If ref counter == 0 {
@@ -299,11 +301,11 @@ nufs_rename(const char *from, const char *to) {
     if (rv2 < 0) {
         return -1;
     }
-    dirInodeFrom->last_view = ts;
-    dirInodeFrom->last_change = ts;
+    dirInodeFrom->last_view = ts.tv_sec;
+    dirInodeFrom->last_change = ts.tv_sec;
 
-    dirInodeTo->last_view = ts;
-    dirInodeTo->last_change = ts;
+    dirInodeTo->last_view = ts.tv_sec;
+    dirInodeTo->last_change = ts.tv_sec;
 
     rv = directory_delete(dirInodeFrom, fileNameFrom);
     if (rv < 0) {
@@ -339,7 +341,7 @@ nufs_chmod(const char *path, mode_t mode) {
 
     inode *node = pathToINode(path);
     node->mode = mode;
-    node->last_change = ts;
+    node->last_change = ts.tv_sec;
     int rv = 0;
     printf("chmod(%s, %04o) -> %d\n", path, mode, rv);
     return rv;
@@ -356,7 +358,7 @@ nufs_truncate(const char *path, off_t size) {
         return -1;
     }
     inode *fptr = pathToINode(path);
-    fptr->last_change = ts;
+    fptr->last_change = ts.tv_sec;
 
     size_t curr_size = fptr->size;
     int numPages = bytes_to_pages(size);
@@ -451,7 +453,7 @@ nufs_open(const char *path, struct fuse_file_info *fi) {
     }
 
     inode *node = pathToINode(path);
-    node->last_view = ts;
+    node->last_view = ts.tv_sec;
 
     int rv = 0;
     printf("open(%s) -> %d\n", path, rv);
@@ -587,7 +589,7 @@ nufs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_fi
 
     //TODO HERE
     if (fptr != NULL) {
-        fptr->last_change = ts;
+        fptr->last_change = ts.tv_sec;
         rv = read_pages(fptr, buf, size, offset);
     }
 
@@ -762,7 +764,7 @@ nufs_write(const char *path, const char *buf, size_t size, off_t offset, struct 
         if (offset + size >= fptr->size) {
             fptr->size = offset + size;
         }
-        fptr->last_change = ts;
+        fptr->last_change = ts.tv_sec;
 
         //assert the copy didn't fail?
         //rv = size;
@@ -774,8 +776,8 @@ nufs_write(const char *path, const char *buf, size_t size, off_t offset, struct 
 
 int changeTimeStamp(const char *path, const struct timespec ts[2]) {
     inode *thing = pathToINode(path);
-    thing->last_view = ts[0];
-    thing->last_change = ts[1];
+    thing->last_view = ts[0].tv_sec;
+    thing->last_change = ts[1].tv_sec;
     return 0;
 }
 

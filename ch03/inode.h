@@ -13,9 +13,9 @@ typedef struct inode {
     int size; // bytes
     int ptrs[2]; // direct pointers
     int iptr; // single indirect pointer
-    struct timespec creation_time;
-    struct timespec last_change;
-    struct timespec last_view;
+    time_t /*struct timespec*/ creation_time;
+    time_t /*struct timespec*/ last_change;
+    time_t /*struct timespec*/ last_view;
 } inode;
 
 void print_inode(inode *node);
