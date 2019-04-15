@@ -591,7 +591,7 @@ nufs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_fi
         rv = read_pages(fptr, buf, size, offset);
     }
 
-    printf("read(%s, %ld bytes, @+%ld) -> %d\n", path, size, offset, rv);
+    printf("read(%s, %ld bytes, @+%ld) -> %d\n\n", path, size, offset, rv);
     return rv;
 }
 
