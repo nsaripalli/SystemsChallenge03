@@ -20,8 +20,9 @@
 #include "bitmap.h"
 #include "directory.h"
 
-size_t PAGE_SIZE = 4096;
-//static const int NUM_INODES = 4096 / sizeof(inode);
+
+
+static const size_t PAGE_SIZE = 4096;
 static const int NUM_INODES = (2 * 4096) / sizeof(inode);
 
 // Get the inode* at path, else NULL
@@ -33,17 +34,13 @@ inode *pathToINode(const char *path) {
         return dirnode;
     }
     char *filename = getTextAfterLastSlash(path);
-    int dirIdx = directory_lookup(dirnode, filename);
+    //int dirIdx = directory_lookup(dirnode, filename);
+    int inum = directory_lookup_inode(dirnode, filename);
     //printf("pathToINode ------ looking for %s\n", filename);
-    if (dirIdx == -1) {
+    if (inum == -1) {
         //not found in directory
-        puts("not found in dir");
         return NULL;
     }
-
-    //dirent *dirData = (dirent *) pages_get_page(dirnode->ptrs[0]);
-    //int inum = dirData[dirIdx].inum;
-    int inum = directory_lookup_inode(dirnode, filename);
     return get_inode(inum);
 }
 
@@ -77,7 +74,7 @@ nufs_getattr(const char *path, struct stat *st) {
         st->st_gid = getgid(); //group id
         st->st_rdev = 0;
         st->st_size = fptr->size;
-        st->st_blksize = PAGE_SIZE;
+        st->st_blksize = 4096;
         st->st_blocks = bytes_to_pages(fptr->size);
         st->st_ctime = fptr->creation_time;
         st->st_atime = fptr->last_view;
@@ -128,7 +125,7 @@ nufs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 // called for: man 2 open, man 2 link
 int
 nufs_mknod(const char *path, mode_t mode, dev_t rdev) {
-    puts("MKNOD has been summoned");
+    //puts("MKNOD has been summoned");
 
     struct timespec ts;
     int rv2 = clock_gettime(CLOCK_REALTIME, &ts);
@@ -147,7 +144,7 @@ nufs_mknod(const char *path, mode_t mode, dev_t rdev) {
     }
 
     inodes->last_change = ts.tv_sec;
-    printf("current time is %li %li \n", ts.tv_sec, ts.tv_sec);
+    //printf("current time is %li %li \n", ts.tv_sec, ts.tv_sec);
 
     void *inodeBitmap = get_inode_bitmap();
 
@@ -172,19 +169,18 @@ nufs_mknod(const char *path, mode_t mode, dev_t rdev) {
             bitmap_put(inodeBitmap, i, 1);
 
             //Set directory entry to point to the above inode
-            inode *dirPtr = pathToLastItemContainer(path);//pathToDirFile(path);
+            inode *dirPtr = pathToLastItemContainer(path);
             char *fileName = getTextAfterLastSlash(path);
             int a = directory_put(dirPtr, fileName, i);
-            printf("put %s at dirent %d\n", fileName, a);
+            //printf("put %s at dirent %d\n", fileName, a);
             break;
         }
         i++;
         bit = bitmap_get(inodeBitmap, i);
     }
     if (i == NUM_INODES) {
-        puts("MKNOD FAILED");
-        printf("mknod(%s, %04o) -> %d\n", path, mode, -1);
-        return -1;
+        //puts("MKNOD FAILED");
+        rv = -1;
     }
     printf("mknod(%s, %04o) -> %d\n", path, mode, rv);
     fflush(stdout);
@@ -197,11 +193,9 @@ int
 nufs_mkdir(const char *path, mode_t mode) {
     int rv = nufs_mknod(path, mode | 040000, 0);
     inode *ptr = pathToINode(path);
-    if (ptr == 0) {
-        perror("Mkdir path lookup failed");
-        return -1;
-    }
+    //todo error check
     ptr->ptrs[0] = alloc_page();
+    ptr->size = 4096;
     void *dataPg = pages_get_page(ptr->ptrs[0]);
     if (dataPg != NULL) {
         dirent *cur = (dirent *) dataPg;
@@ -225,7 +219,7 @@ void clear_file(inode *file) {
 
 int
 nufs_unlink(const char *path) {
-    int rv = -1;
+    int rv = 0;
 
     inode *dirPtr = pathToLastItemContainer(path);
     struct timespec ts;
@@ -240,15 +234,13 @@ nufs_unlink(const char *path) {
     inode *fileptr = get_inode(inodeNum);
     fileptr->last_change = ts.tv_sec;
 
-    fileptr->refs--;
+    // Decrement ref counter
+    // If ref counter == 0 {
+    directory_delete(dirPtr, fileName);
+    clear_file(fileptr);
+    bitmap_put(get_inode_bitmap(), inodeNum, 0);
+    // }
 
-    if (fileptr->refs == 0) {
-        directory_delete(dirPtr, fileName);
-        clear_file(fileptr);
-        bitmap_put(get_inode_bitmap(), inodeNum, 0);
-    }
-
-    rv = 0;
     printf("unlink(%s) -> %d\n", path, rv);
     return rv;
 }
@@ -256,26 +248,6 @@ nufs_unlink(const char *path) {
 int
 nufs_link(const char *from, const char *to) {
     int rv = -1;
-
-    inode *dd = pathToLastItemContainer(from);
-    //TODO does this work the way I think it works?
-    int iNodeNumber = directory_lookup_inode(dd, getTextAfterLastSlash(from));
-
-    inode *file = pathToINode(from);
-    if (file == 0) {
-        perror("Unable to find matching file in link");
-        return -1;
-    }
-
-    inode *toDir = pathToLastItemContainer(to);
-
-    //TODO: getTextAfterLastSlash?
-    directory_put(toDir, getTextAfterLastSlash(to), iNodeNumber);
-
-
-    file->refs++;
-    rv = 0;
-
     printf("link(%s => %s) -> %d\n", from, to, rv);
     return rv;
 }
@@ -374,9 +346,9 @@ nufs_chmod(const char *path, mode_t mode) {
     return rv;
 }
 
+
 int
 nufs_truncate(const char *path, off_t size) {
-    //TODO This segfaults?
     puts("CALL TO TRUNCATE");
     struct timespec ts;
     int rv2 = clock_gettime(CLOCK_REALTIME, &ts);
@@ -386,17 +358,14 @@ nufs_truncate(const char *path, off_t size) {
     inode *fptr = pathToINode(path);
     fptr->last_change = ts.tv_sec;
 
-    size_t currNodeSize = fptr->size;
-    int currPage = bytes_to_pages(currNodeSize);
-    int goalPages = bytes_to_pages(size);
-    int pagesToRemove = currPage - goalPages;
-    int sizeToRemove = size - currNodeSize;
+    size_t curr_size = fptr->size;
+    int numPages = bytes_to_pages(size);
+    int pagesToRemove = numPages = bytes_to_pages(curr_size);
+    int sizeToRemove = curr_size - size;
 
     while (pagesToRemove > 0) {
-        printf("loop on line 366 with pagesToRemove: %i\n", pagesToRemove);
-
         //UPDATE THE SIZE
-        if (currPage == 1) {
+        if (numPages == 1) {
             void *pg = pages_get_page(fptr->ptrs[0]);
 
             long currSizeToRemove = min(sizeToRemove, PAGE_SIZE);
@@ -409,9 +378,8 @@ nufs_truncate(const char *path, off_t size) {
             }
 
             fptr->size -= currSizeToRemove;
-            sizeToRemove -= currSizeToRemove;
 
-        } else if (currPage == 2) {//numPages == 2) {
+        } else if (numPages == 2) {//numPages == 2) {
             void *pg = pages_get_page(fptr->ptrs[1]);
 
             long currSizeToRemove = min(sizeToRemove, PAGE_SIZE);
@@ -425,8 +393,6 @@ nufs_truncate(const char *path, off_t size) {
             }
 
             fptr->size -= currSizeToRemove;
-            sizeToRemove -= currSizeToRemove;
-
         } else {
             int indirectPoints = fptr->iptr;
             int *indirectPage = pages_get_page(indirectPoints);
@@ -436,20 +402,16 @@ nufs_truncate(const char *path, off_t size) {
                 return -1;
             }
 
-            int *curr_index_pointer = indirectPage;
+            void *curr_index_pointer = indirectPage;
             int index = 0;
-            while (*curr_index_pointer != 0) {
-                printf("loop of while (%i != 0) wiht index %i\n", *curr_index_pointer, index);
-                curr_index_pointer = curr_index_pointer + 1;
+            while (curr_index_pointer != 0) {
+                curr_index_pointer = indirectPage + index;
                 index++;
-
-                if (index == PAGE_SIZE / sizeof(int)) {
-                    puts("PAGE OVERFLOW");
-                    return -1;
-                }
             }
             index--;
 
+            //TODO WHAT IS HAPPENING HERE
+            indirectPage = pages_get_page(indirectPoints);
 
             int *currPointer = indirectPage + index;
             int currPAge = *(currPointer);
@@ -460,21 +422,19 @@ nufs_truncate(const char *path, off_t size) {
             memset(pg + PAGE_SIZE - currSizeToRemove, 0, currSizeToRemove);//sizeLeft);
 
             if (currSizeToRemove == PAGE_SIZE) {
-                printf("if (%li == PAGE_SIZE)", currSizeToRemove);
                 free_page(currPAge);
                 memset(currPointer, 0, sizeof(int));//sizeLeft);
             }
 
             fptr->size -= currSizeToRemove;
-            sizeToRemove -= currSizeToRemove;
         }
 
-        currPage--;
+        numPages--;
         pagesToRemove--;
     }
 
     fptr->size = size;
-    int rv = size;
+    int rv = 0;
     printf("truncate(%s, %ld bytes) -> %d\n", path, size, rv);
     return rv;
 }
@@ -501,13 +461,13 @@ nufs_open(const char *path, struct fuse_file_info *fi) {
 
 int read_indirect_page(inode *fptr, char *buf, size_t size, off_t offset) {//sizeLeft) {
     //printf("---indirect---- size = %ld || off = %ld\n", size, offset);
-    off_t offHere = offset; //- (2 * PAGE_SIZE); //already checked 2 pages by the time we got here
+    off_t offHere = offset; //- (2 * 4096); //already checked 2 pages by the time we got here
     void *metaPg = pages_get_page(fptr->iptr);
     if (metaPg < 0) {
         return -1;
     }
     int *metaPgInt = (int *) metaPg;
-    off_t i = offHere / PAGE_SIZE;
+    off_t i = offHere / 4096;
 
     //printf("offset = %ld ||| offhere = %ld\n", offset, offHere);
     size_t sizeLeft = size;
@@ -517,10 +477,10 @@ int read_indirect_page(inode *fptr, char *buf, size_t size, off_t offset) {//siz
         //printf("sizeleft = %ld\n", sizeLeft);
         int nextPgIdx = metaPgInt[i];
         void *curPg = pages_get_page(nextPgIdx);
-        if (offHere < PAGE_SIZE) {
+        if (offHere < 4096) {
             offHere = max(0, offHere);
 
-            size_t num_to_Read = min(PAGE_SIZE, max(sizeLeft + offHere, 0));
+            size_t num_to_Read = min(4096, max(sizeLeft + offHere, 0));
             printf("reading in %li page of size %zu\n", i, num_to_Read);
 
             memcpy(buf, curPg + offHere, num_to_Read);
@@ -533,81 +493,79 @@ int read_indirect_page(inode *fptr, char *buf, size_t size, off_t offset) {//siz
             offHere = 0;
 
         } else {
-            offHere -= PAGE_SIZE;
+            offHere -= 4096;
         }
     }
     return sizeRead;
 }
 
-//analogous to writing (ie. in PAGE_SIZE byte chunks)
+//analogous to writing (ie. in 4096 byte chunks)
 int read_pages(inode *fptr, char *buf, size_t size, off_t offset) {
     printf("Reading in size and offset %zu %li \n", size, offset);
 
+    //todo handle offsets > 4096?
     int numPages = bytes_to_pages(fptr->size + offset);
     int sizeLeft = size;//fptr->size;
     int sizeRead = 0;
 
     size_t mutated_offset = offset;
 
-    if (numPages == 1 && offset < PAGE_SIZE) {
+    if (numPages == 1 && offset < 4096) { //todo incorporate page size into how much is read inside the if
         puts("read from first page");
         void *pg = pages_get_page(fptr->ptrs[0]);
-        size_t num_to_Read = min(PAGE_SIZE, max(sizeLeft + mutated_offset, 0));
+        size_t num_to_Read = min(4096, max(sizeLeft + mutated_offset, 0));
         printf("reading in first page of size %zu and returning\n", num_to_Read);
 
 
-        memcpy(buf, pg + mutated_offset, num_to_Read);
+        memcpy(buf, pg + offset, num_to_Read);
         sizeRead += num_to_Read;
         return sizeRead;//fptr->size;
     }
-    if (numPages > 1 && offset < PAGE_SIZE) {
+    if (numPages > 1 && offset < 4096) {
         void *pg = pages_get_page(fptr->ptrs[0]);
 
-        size_t num_to_Read = max(0, min(sizeLeft + mutated_offset, PAGE_SIZE));
+        size_t num_to_Read = max(0, min(sizeLeft + mutated_offset, 4096));
         printf("reading in first page of size %zu\n", num_to_Read);
 
-        memcpy(buf, pg + mutated_offset, num_to_Read);
+        memcpy(buf, pg + offset, num_to_Read);
 
         sizeRead += num_to_Read;
         sizeLeft -= num_to_Read;
         buf += num_to_Read;
     }
 
-    mutated_offset = max(0, (mutated_offset - PAGE_SIZE));
+    mutated_offset = max(0, (mutated_offset - 4096));
 
-    if (numPages == 2 && offset < (2 * PAGE_SIZE)) {
+    if (numPages == 2 && offset < (2 * 4096)) {
         puts("read from second page");
         void *pg = pages_get_page(fptr->ptrs[1]);
-        size_t num_to_Read = max(0, min(sizeLeft + mutated_offset, PAGE_SIZE));
+        size_t num_to_Read = max(0, min(sizeLeft + mutated_offset, 4096));
         printf("reading in second page of size %zu and returning \n", num_to_Read);
 
-        memcpy(buf, pg + mutated_offset, num_to_Read);
+        memcpy(buf, pg + offset, num_to_Read);
 
         sizeRead += num_to_Read;
         return sizeRead;
     }
-    if (numPages > 2 && offset < (2 * PAGE_SIZE)) {
+    if (numPages > 2 && offset < (2 * 4096)) {
         void *pg = pages_get_page(fptr->ptrs[1]);
 
-        size_t num_to_Read = max(0, min(sizeLeft + mutated_offset, PAGE_SIZE));
+        size_t num_to_Read = max(0, min(sizeLeft + mutated_offset, 4096));
         printf("reading in second page of size %zu\n", num_to_Read);
 
-        memcpy(buf, pg + mutated_offset, num_to_Read);
+        memcpy(buf, pg + offset, num_to_Read);
 
         sizeLeft -= num_to_Read;
         sizeRead += num_to_Read;
         buf += num_to_Read;
     }
 
-    mutated_offset = max(0, (mutated_offset - PAGE_SIZE));
+    mutated_offset = max(0, (mutated_offset - 4096));
 
     int rv = read_indirect_page(fptr, buf, sizeLeft, max(0, mutated_offset));//size, offset);//sizeLeft);
-    if (rv < 0) {
-        perror("read indirect pages failed");
-        return -1;
-    }
+    //assert(rv > 0); todo better error check here
 
-    return sizeRead + rv;// + PAGE_SIZE + PAGE_SIZE;
+    return sizeRead + rv;// + 4096 + 4096;
 }
 
 
@@ -627,13 +585,8 @@ nufs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_fi
         return -1;
     }
 
+    //TODO HERE
     if (fptr != NULL) {
-
-        if (fptr->size < offset) {
-            perror("File offset for read was greater than the file size");
-            return 0;
-        }
-
         fptr->last_change = ts.tv_sec;
         rv = read_pages(fptr, buf, size, offset);
     }
@@ -645,7 +598,7 @@ nufs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_fi
 //could probably use offset bytes_to_page to figure out where we write
 //instead of checking for == 0
 int write_indirect_page(inode *fptr, const char *buf, size_t size, off_t offset) {//sizeLeft) {
-    off_t offHere = offset; //- (2 * PAGE_SIZE); //already checked 2 pages by the time we got here
+    off_t offHere = offset; //- (2 * 4096); //already checked 2 pages by the time we got here
 
     if (fptr->iptr == 0) {
         fptr->iptr = alloc_page();
@@ -656,7 +609,7 @@ int write_indirect_page(inode *fptr, const char *buf, size_t size, off_t offset)
         return -1;
     }
     int *metaPgInt = (int *) metaPg;
-    off_t i = offHere / PAGE_SIZE;
+    off_t i = offHere / 4096;
 
     //printf("offset = %ld ||| offhere = %ld\n", offset, offHere);
     long sizeLeft = size;
@@ -677,10 +630,10 @@ int write_indirect_page(inode *fptr, const char *buf, size_t size, off_t offset)
         }
 
         void *curPg = pages_get_page(metaPgInt[i]);
-        if (offHere < PAGE_SIZE) {
+        if (offHere < 4096) {
             offHere = max(0, offHere);
 
-            size_t num_to_Write = min(PAGE_SIZE, max(sizeLeft + offHere, 0));
+            size_t num_to_Write = min(4096, max(sizeLeft + offHere, 0));
 //            printf("size plus offset is %lu\n", sizeLeft);
             printf("writing in %li page of size %zu\n", i, num_to_Write);
 
@@ -695,7 +648,7 @@ int write_indirect_page(inode *fptr, const char *buf, size_t size, off_t offset)
 
         } else {
             puts("skipping becasue of offset");
-            offHere -= PAGE_SIZE;
+            offHere -= 4096;
         }
     }
     return sizeRead;
@@ -713,13 +666,13 @@ int write_pages(inode *fptr, const char *buf, size_t size, off_t offset) {
 
     size_t mutated_offset = offset;
 
-    if (numPages == 1 && offset < PAGE_SIZE) {
+    if (numPages == 1 && offset < 4096) { //todo incorporate page size into how much is read inside the if
         puts("write to first page");
         if (fptr->ptrs[0] == 0) {
             fptr->ptrs[0] = alloc_page();
         }
         void *pg = pages_get_page(fptr->ptrs[0]);
-        size_t num_to_Read = min(PAGE_SIZE, max(sizeLeft + mutated_offset, 0));
+        size_t num_to_Read = min(4096, max(sizeLeft + mutated_offset, 0));
         printf("write in first page of size %zu and returning\n", num_to_Read);
 
 
@@ -727,13 +680,13 @@ int write_pages(inode *fptr, const char *buf, size_t size, off_t offset) {
         sizeRead += num_to_Read;
         return sizeRead;//fptr->size;
     }
-    if (numPages > 1 && offset < PAGE_SIZE) {
+    if (numPages > 1 && offset < 4096) {
         if (fptr->ptrs[0] == 0) {
             fptr->ptrs[0] = alloc_page();
         }
         void *pg = pages_get_page(fptr->ptrs[0]);
 
-        size_t num_to_Read = max(0, min(sizeLeft + mutated_offset, PAGE_SIZE));
+        size_t num_to_Read = max(0, min(sizeLeft + mutated_offset, 4096));
         printf("write in first page of size %zu\n", num_to_Read);
 
         memcpy(pg + mutated_offset, buf, num_to_Read);
@@ -743,16 +696,16 @@ int write_pages(inode *fptr, const char *buf, size_t size, off_t offset) {
         buf += num_to_Read;
     }
 
-    mutated_offset = max(0, (mutated_offset - PAGE_SIZE));
+    mutated_offset = max(0, (mutated_offset - 4096));
 
 
-    if (numPages == 2 && offset < (2 * PAGE_SIZE)) {
+    if (numPages == 2 && offset < (2 * 4096)) {
         puts("write from second page");
         if (fptr->ptrs[1] == 0) {
             fptr->ptrs[1] = alloc_page();
         }
         void *pg = pages_get_page(fptr->ptrs[1]);
-        size_t num_to_Read = max(0, min(sizeLeft + mutated_offset, PAGE_SIZE));
+        size_t num_to_Read = max(0, min(sizeLeft + mutated_offset, 4096));
         printf("write in second page of size %zu and returning \n", num_to_Read);
 
         memcpy(pg + mutated_offset, buf, num_to_Read);
@@ -760,13 +713,13 @@ int write_pages(inode *fptr, const char *buf, size_t size, off_t offset) {
         sizeRead += num_to_Read;
         return sizeRead;
     }
-    if (numPages > 2 && offset < (2 * PAGE_SIZE)) {
+    if (numPages > 2 && offset < (2 * 4096)) {
         if (fptr->ptrs[1] == 0) {
             fptr->ptrs[1] = alloc_page();
         }
         void *pg = pages_get_page(fptr->ptrs[1]);
 
-        size_t num_to_Read = max(0, min(sizeLeft + mutated_offset, PAGE_SIZE));
+        size_t num_to_Read = max(0, min(sizeLeft + mutated_offset, 4096));
         printf("write in second page of size %zu\n", num_to_Read);
 
         memcpy(pg + mutated_offset, buf, num_to_Read);
@@ -776,16 +729,13 @@ int write_pages(inode *fptr, const char *buf, size_t size, off_t offset) {
         buf += num_to_Read;
     }
 
-    mutated_offset = max(0, (mutated_offset - PAGE_SIZE));
+    mutated_offset = max(0, (mutated_offset - 4096));
 
 
     int rv = write_indirect_page(fptr, buf, sizeLeft, max(0, mutated_offset));//size, offset);//sizeLeft);
-    if (rv < 0) {
-        perror("write indirect pages failed");
-        return -1;
-    }
+    //assert(rv > 0); todo better error check here
 
-    return sizeRead + rv;// + PAGE_SIZE + PAGE_SIZE;
+    return sizeRead + rv;// + 4096 + 4096;
 }
 
 // Actually write data
@@ -847,23 +797,6 @@ nufs_ioctl(const char *path, int cmd, void *arg, struct fuse_file_info *fi,
     return rv;
 }
 
-int nufs_symlink(const char *to, const char *from) {
-    int rv = -1;
-
-
-    printf("symlink to %s from %s -> -%i\n", to, from, rv);
-    return rv;
-}
-
-
-int nufs_readlink(const char *path, char *buf, size_t size) {
-    int rv = -1;
-
-
-    printf("readLinek path %s size %zu -> -%i\n", path, size, rv);
-    return rv;
-}
-
 void
 nufs_init_ops(struct fuse_operations *ops) {
     memset(ops, 0, sizeof(struct fuse_operations));
@@ -883,8 +816,6 @@ nufs_init_ops(struct fuse_operations *ops) {
     ops->write = nufs_write;
     ops->utimens = nufs_utimens;
     ops->ioctl = nufs_ioctl;
-    ops->readlink = nufs_readlink;
-    ops->symlink = nufs_symlink;
 };
 
 struct fuse_operations nufs_ops;
