@@ -36,6 +36,7 @@ void directory_init() {
         return;
     }
 
+    //Root node can never be deleted
     inodes[0].refs = 1;
     inodes[0].mode = 040755;
     inodes[0].size = 4096;
