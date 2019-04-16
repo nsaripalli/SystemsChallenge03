@@ -79,26 +79,26 @@ int directory_lookup(inode *dd, const char *name) {
     if (pgRes == -1 && dd->size >= (4096 * 2)) {
         //Didn't find in first direct page, check second
         pgRes = directory_lookup_page(pages_get_page(dd->ptrs[1]), name);
-	if(pgRes != -1) {
-		return MAX_DIR_ENTRIES + pgRes;
-	}
+        if (pgRes != -1) {
+            return MAX_DIR_ENTRIES + pgRes;
+        }
     }
     return pgRes;
 }
 
 // Returns the inode of the item in the directory, or -1
-int directory_lookup_inode(inode* dd, const char* name) {
+int directory_lookup_inode(inode *dd, const char *name) {
     // Look in first direct page
     int pgRes = directory_lookup_page(pages_get_page(dd->ptrs[0]), name);
-    if(pgRes != -1) {
-	return ((dirent*)pages_get_page(dd->ptrs[0]))[pgRes].inum;
+    if (pgRes != -1) {
+        return ((dirent *) pages_get_page(dd->ptrs[0]))[pgRes].inum;
     }
-    if(dd->size >= (4096 * 2)) {
+    if (dd->size >= (4096 * 2)) {
         //Didn't find in first direct page, check second
-	pgRes = directory_lookup_page(pages_get_page(dd->ptrs[1]), name);
-	if(pgRes != -1) {
-	    return ((dirent*)pages_get_page(dd->ptrs[1]))[pgRes].inum;
-	}
+        pgRes = directory_lookup_page(pages_get_page(dd->ptrs[1]), name);
+        if (pgRes != -1) {
+            return ((dirent *) pages_get_page(dd->ptrs[1]))[pgRes].inum;
+        }
     }
     return pgRes;
 }
@@ -129,17 +129,17 @@ int directory_put_page(int dataPgIdx, const char *name, int inum) {
 int directory_put(inode *dd, const char *name, int inum) {
     int tryPg = directory_put_page(dd->ptrs[0], name, inum);
     if (tryPg == -1 && dd->size <= 4096  /*&& dd->ptrs[1]==0*/) { //this was a ?
-	dd->ptrs[1] = alloc_page();
+        dd->ptrs[1] = alloc_page();
 
-	    // mark all entries in this directory as empty/unset
-   	 void *datapg = pages_get_page(dd->ptrs[1]);
-    	dirent *cur = (dirent *) datapg;
-   	 for (int i = 0; i < MAX_DIR_ENTRIES; ++i) {
-   	     cur[i].inum = -1;
-   	 }
+        // mark all entries in this directory as empty/unset
+        void *datapg = pages_get_page(dd->ptrs[1]);
+        dirent *cur = (dirent *) datapg;
+        for (int i = 0; i < MAX_DIR_ENTRIES; ++i) {
+            cur[i].inum = -1;
+        }
 
-	
-	dd->size += 4096;
+
+        dd->size += 4096;
     }
     if (tryPg == -1 && dd->size >= (4096 * 2)) {
         tryPg = directory_put_page(dd->ptrs[1], name, inum);
@@ -189,7 +189,7 @@ slist *directory_list_page(slist *list, int dataPgIdx) {
     int cntr = 0;
     while (cntr < MAX_DIR_ENTRIES) {
         if (/*cur->inum != 0 && */cur->inum != -1) {
-	    printf("inum = %d . added |%s| to list\n", cur->inum, cur->name);
+            printf("inum = %d . added |%s| to list\n", cur->inum, cur->name);
             list = s_cons(cur->name, list);
         }
         cntr++;
@@ -201,30 +201,30 @@ slist *directory_list_page(slist *list, int dataPgIdx) {
 
 // from https://www.tutorialspoint.com/c_standard_library/c_function_strtok.htm
 // This gets the inode of the last item in path
-inode* pathToDir(const char* path) {
-    slist* p = s_split(path, '/');
-    inode* rootDir = (inode*)pages_get_page(1);
-    inode* cur = rootDir;
-    inode* prev = rootDir;
+inode *pathToDir(const char *path) {
+    slist *p = s_split(path, '/');
+    inode *rootDir = (inode *) pages_get_page(1);
+    inode *cur = rootDir;
+    inode *prev = rootDir;
 
-    if(streq(p->data, "")) {
+    if (streq(p->data, "")) {
         p = p->next;
     }
-    while(p != NULL) {
+    while (p != NULL) {
         //printf("Looking for |%s|\n", p->data);
         int dirIdx = directory_lookup(cur, p->data);
-        void* dirData = NULL;
-        if(dirIdx < MAX_DIR_ENTRIES) {
+        void *dirData = NULL;
+        if (dirIdx < MAX_DIR_ENTRIES) {
             dirData = pages_get_page(cur->ptrs[0]);
         } else {
             dirData = pages_get_page(cur->ptrs[1]);
-	    dirIdx -= MAX_DIR_ENTRIES; //indx in 2nd pg
+            dirIdx -= MAX_DIR_ENTRIES; //indx in 2nd pg
         }
-        dirent* curEntries = (dirent*)dirData;
+        dirent *curEntries = (dirent *) dirData;
         //printf("found entry --- %s\n", curEntries[dirIdx].name);
         int inodeNum = curEntries[dirIdx].inum;
         prev = cur;
-        cur = /*rootDir*/ ((inode*)pages_get_page(1)) + inodeNum; // use the inode page!
+        cur = /*rootDir*/ ((inode *) pages_get_page(1)) + inodeNum; // use the inode page!
         print_inode(cur);
         p = p->next;
     }
@@ -235,30 +235,30 @@ inode* pathToDir(const char* path) {
 //i know this is almost identical to above. just want to see if it works
 //abstraction later....
 //This function gets the inode the contains the last item
-inode* pathToLastItemContainer(const char* path) {
-    slist* p = s_split(path, '/');
-    inode* rootDir = (inode*)pages_get_page(1);
-    inode* cur = rootDir;
-    inode* prev = rootDir;
+inode *pathToLastItemContainer(const char *path) {
+    slist *p = s_split(path, '/');
+    inode *rootDir = (inode *) pages_get_page(1);
+    inode *cur = rootDir;
+    inode *prev = rootDir;
 
-    if(streq(p->data, "")) {
+    if (streq(p->data, "")) {
         p = p->next;
     }
-    while(p != NULL) {
+    while (p != NULL) {
         //printf("Looking for |%s|\n", p->data);
         int dirIdx = directory_lookup(cur, p->data);
-        void* dirData = NULL;
-        if(dirIdx < MAX_DIR_ENTRIES) {
+        void *dirData = NULL;
+        if (dirIdx < MAX_DIR_ENTRIES) {
             dirData = pages_get_page(cur->ptrs[0]);
         } else {
             dirData = pages_get_page(cur->ptrs[1]);
-	    dirIdx -= MAX_DIR_ENTRIES; //indx in 2nd pg
+            dirIdx -= MAX_DIR_ENTRIES; //indx in 2nd pg
         }
-        dirent* curEntries = (dirent*)dirData;
+        dirent *curEntries = (dirent *) dirData;
         //printf("found entry --- %s\n", curEntries[dirIdx].name);
         int inodeNum = curEntries[dirIdx].inum;
         prev = cur;
-        cur = /*rootDir*/ ((inode*)pages_get_page(1)) + inodeNum; //use inode page
+        cur = /*rootDir*/ ((inode *) pages_get_page(1)) + inodeNum; //use inode page
         print_inode(cur);
         p = p->next;
     }

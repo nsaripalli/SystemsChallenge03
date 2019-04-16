@@ -221,14 +221,13 @@ void clear_file(inode *file) {
 }
 
 
-//TODO SYM LINKS
 int
 nufs_unlink(const char *path) {
     int rv = -1;
 
     inode *dirPtr = pathToLastItemContainer(path);
     struct timespec ts;
-    int rv2 = clock_getres(CLOCK_REALTIME, &ts);
+    int rv2 = clock_gettime(CLOCK_REALTIME, &ts);
     dirPtr->last_change = ts.tv_sec;
 
     char *fileName = getTextAfterLastSlash(path);
@@ -779,11 +778,13 @@ int read_pages(inode *fptr, char *buf, size_t size, off_t offset) {
     mutated_offset = max(0, (mutated_offset - PAGE_SIZE));
 
     int rv = read_indirect_page(fptr, buf, sizeLeft, max(0, mutated_offset));//size, offset);//sizeLeft);
+
     if (rv < 0) {
         perror("read indirect pages failed");
         return -1;
     }
 
+    printf("size read %i and rv is %i", sizeRead, rv);
     return sizeRead + rv;// + PAGE_SIZE + PAGE_SIZE;
 }
 
@@ -1024,7 +1025,7 @@ nufs_ioctl(const char *path, int cmd, void *arg, struct fuse_file_info *fi,
     return rv;
 }
 
-const int symLinkModeNumber = 120000;
+const int symLinkModeNumber = 0120000;
 
 int nufs_symlink(const char *to, const char *from) {
 
@@ -1056,8 +1057,11 @@ int nufs_symlink(const char *to, const char *from) {
 int nufs_readlink(const char *path, char *buf, size_t size) {
     int rv = -1;
 
+    printf("size in readLink %zu\n", size);
+
     rv = nufs_read(path, buf, size, 0, 0);
 
+    rv = 0;
     printf("readLinek path %s size %zu -> -%i\n", path, size, rv);
     return rv;
 }
