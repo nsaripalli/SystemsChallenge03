@@ -17,8 +17,8 @@ clean: unmount
 	rmdir mnt || true
 
 mount: nufs
-#	make clean
-#	make nufs
+	make clean
+	make nufs
 	mkdir -p mnt || true
 	./nufs -s -f mnt data.nufs
 

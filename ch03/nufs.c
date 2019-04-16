@@ -221,6 +221,7 @@ void clear_file(inode *file) {
 }
 
 
+//TODO SYM LINKS
 int
 nufs_unlink(const char *path) {
     int rv = -1;
@@ -1023,11 +1024,31 @@ nufs_ioctl(const char *path, int cmd, void *arg, struct fuse_file_info *fi,
     return rv;
 }
 
+const int symLinkModeNumber = 120000;
+
 int nufs_symlink(const char *to, const char *from) {
+
+    if (strlen(from) == 0 || strlen(to) == 0) {
+        perror("to or from is too short in symlink");
+        return -ENOENT;
+    }
+
     int rv = -1;
+    rv = nufs_mknod(from, symLinkModeNumber, 0);
+    if (rv != 0) {
+        perror("symLink creating not sucessful");
+        return -1;
+    }
 
+    printf("length of to is %lu", strlen(to));
+    rv = nufs_write(from, to, strlen(to), 0, 0);
+    if (rv <= 0) {
+        rv = -1;
+    } else {
+        rv = 0;
+    }
 
-    printf("symlink to %s from %s -> -%i\n", to, from, rv);
+    printf("symlink to %s from %s -> %i\n", to, from, rv);
     return rv;
 }
 
@@ -1035,6 +1056,7 @@ int nufs_symlink(const char *to, const char *from) {
 int nufs_readlink(const char *path, char *buf, size_t size) {
     int rv = -1;
 
+    rv = nufs_read(path, buf, size, 0, 0);
 
     printf("readLinek path %s size %zu -> -%i\n", path, size, rv);
     return rv;
