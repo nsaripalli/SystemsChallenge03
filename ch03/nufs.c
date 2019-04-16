@@ -20,7 +20,9 @@
 #include "bitmap.h"
 #include "directory.h"
 
-size_t PAGE_SIZE = 4096;
+
+
+static const size_t PAGE_SIZE = 4096;
 static const int NUM_INODES = (2 * 4096) / sizeof(inode);
 
 // Get the inode* at path, else NULL
@@ -32,17 +34,14 @@ inode *pathToINode(const char *path) {
         return dirnode;
     }
     char *filename = getTextAfterLastSlash(path);
-    int dirIdx = directory_lookup(dirnode, filename);
+    //int dirIdx = directory_lookup(dirnode, filename);
+    int inum = directory_lookup_inode(dirnode, filename);
     //printf("pathToINode ------ looking for %s\n", filename);
-    if (dirIdx == -1) {
+    if (inum == -1) {
         //not found in directory
         puts("not found in dir");
         return NULL;
     }
-
-    //dirent *dirData = (dirent *) pages_get_page(dirnode->ptrs[0]);
-    //int inum = dirData[dirIdx].inum;
-    int inum = directory_lookup_inode(dirnode, filename);
     return get_inode(inum);
 }
 
@@ -76,7 +75,7 @@ nufs_getattr(const char *path, struct stat *st) {
         st->st_gid = getgid(); //group id
         st->st_rdev = 0;
         st->st_size = fptr->size;
-        st->st_blksize = PAGE_SIZE;
+        st->st_blksize = 4096;
         st->st_blocks = bytes_to_pages(fptr->size);
         st->st_ctime = fptr->creation_time;
         st->st_atime = fptr->last_view;
@@ -146,7 +145,7 @@ nufs_mknod(const char *path, mode_t mode, dev_t rdev) {
     }
 
     inodes->last_change = ts.tv_sec;
-    printf("current time is %li %li \n", ts.tv_sec, ts.tv_sec);
+    //printf("current time is %li %li \n", ts.tv_sec, ts.tv_sec);
 
     void *inodeBitmap = get_inode_bitmap();
 
@@ -171,10 +170,10 @@ nufs_mknod(const char *path, mode_t mode, dev_t rdev) {
             bitmap_put(inodeBitmap, i, 1);
 
             //Set directory entry to point to the above inode
-            inode *dirPtr = pathToLastItemContainer(path);//pathToDirFile(path);
+            inode *dirPtr = pathToLastItemContainer(path);
             char *fileName = getTextAfterLastSlash(path);
             int a = directory_put(dirPtr, fileName, i);
-            printf("put %s at dirent %d\n", fileName, a);
+            //printf("put %s at dirent %d\n", fileName, a);
             break;
         }
         i++;
@@ -201,6 +200,7 @@ nufs_mkdir(const char *path, mode_t mode) {
         return -1;
     }
     ptr->ptrs[0] = alloc_page();
+    ptr->size = 4096;
     void *dataPg = pages_get_page(ptr->ptrs[0]);
     if (dataPg != NULL) {
         dirent *cur = (dirent *) dataPg;
