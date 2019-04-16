@@ -21,7 +21,6 @@
 #include "directory.h"
 
 
-
 static const size_t PAGE_SIZE = 4096;
 static const int NUM_INODES = (2 * 4096) / sizeof(inode);
 
@@ -373,60 +372,84 @@ nufs_chmod(const char *path, mode_t mode) {
     return rv;
 }
 
+
 int
-nufs_truncate(const char *path, off_t size) {
-    //TODO This segfaults?
-    puts("CALL TO TRUNCATE");
+nufs_truncate_expand(const char *path, off_t size) {
+    puts("CALL TO TRUNCATE EXPAND");
     struct timespec ts;
     int rv2 = clock_gettime(CLOCK_REALTIME, &ts);
     if (rv2 < 0) {
+        puts("time error");
         return -1;
     }
     inode *fptr = pathToINode(path);
+    if (fptr == 0) {
+        perror("path not found");
+        return -1;
+    }
+
     fptr->last_change = ts.tv_sec;
 
-    size_t currNodeSize = fptr->size;
-    int currPage = bytes_to_pages(currNodeSize);
+    int currPage = bytes_to_pages(fptr->size);
     int goalPages = bytes_to_pages(size);
-    int pagesToRemove = currPage - goalPages;
-    int sizeToRemove = size - currNodeSize;
+    int pagesToAdd = goalPages - currPage;
+    int sizeToAdd = size - fptr->size;
 
-    while (pagesToRemove > 0) {
-        printf("loop on line 366 with pagesToRemove: %i\n", pagesToRemove);
+    printf("currNodeSize: %zu and size %li\n", fptr->size, size);
+    printf("currPage %i, goalPages %i, pagesToAdd %i, sizeToAdd %i\n", currPage, goalPages, pagesToAdd,
+           sizeToAdd);
+
+    while (pagesToAdd > 0) {
+        printf("loop on line 366 with pagesTo Add: %i and size to Add:%i\n", pagesToAdd, sizeToAdd);
+
+        if (currPage == 0) {
+            fptr->ptrs[0] = alloc_page();
+            sizeToAdd = max(sizeToAdd - PAGE_SIZE, 0);
+        }
 
         //UPDATE THE SIZE
         if (currPage == 1) {
+            puts("currPAge 1");
+
+            if (fptr->ptrs[0] == 0) {
+                fptr->ptrs[0] = alloc_page();
+            }
+
+
             void *pg = pages_get_page(fptr->ptrs[0]);
 
-            long currSizeToRemove = min(sizeToRemove, PAGE_SIZE);
+            long currSizeToAdd = min(sizeToAdd, PAGE_SIZE - fptr->size);
 
-            memset(pg + PAGE_SIZE - currSizeToRemove, 0, currSizeToRemove);//sizeLeft);
+            memset(pg + fptr->size, 0, currSizeToAdd);//sizeLeft);
 
-            if (currSizeToRemove == PAGE_SIZE) {
-                free_page(fptr->ptrs[0]);
-                fptr->ptrs[0] = 0;
-            }
-
-            fptr->size -= currSizeToRemove;
-            sizeToRemove -= currSizeToRemove;
+            fptr->size += currSizeToAdd;
+            sizeToAdd -= currSizeToAdd;
 
         } else if (currPage == 2) {//numPages == 2) {
-            void *pg = pages_get_page(fptr->ptrs[1]);
+            puts("currPAge 2");
 
-            long currSizeToRemove = min(sizeToRemove, PAGE_SIZE);
-
-
-            memset(pg + PAGE_SIZE - currSizeToRemove, 0, currSizeToRemove);//sizeLeft);
-
-            if (currSizeToRemove == PAGE_SIZE) {
-                free_page(fptr->ptrs[1]);
-                fptr->ptrs[1] = 0;
+            if (fptr->ptrs[1] == 0) {
+                fptr->ptrs[1] = alloc_page();
             }
 
-            fptr->size -= currSizeToRemove;
-            sizeToRemove -= currSizeToRemove;
+            void *pg = pages_get_page(fptr->ptrs[1]);
+
+            long currSizeToAdd = min(sizeToAdd, (2 * PAGE_SIZE) - fptr->size);
+
+
+            memset(pg + (fptr->size - PAGE_SIZE), 0, currSizeToAdd);//sizeLeft);
+            //                     ^^^^ how far into 2nd pg we are
+
+            fptr->size += currSizeToAdd;
+            sizeToAdd -= currSizeToAdd;
 
         } else {
+            puts("currPAge Else");
+
+            if (fptr->iptr == 0) {
+                fptr->iptr = alloc_page();
+            }
+
             int indirectPoints = fptr->iptr;
             int *indirectPage = pages_get_page(indirectPoints);
 
@@ -448,6 +471,144 @@ nufs_truncate(const char *path, off_t size) {
                 }
             }
             index--;
+
+            //index is last allocated index on indirect page
+
+            if (index == -1) {
+                indirectPage[0] = alloc_page();
+                index = 0;
+
+            }
+
+
+            int *currPointer = indirectPage + index;
+            int currPAge = *(currPointer);
+            void *pg = pages_get_page(currPAge);
+
+            long currSizeToAdd = min(sizeToAdd, (PAGE_SIZE * (index + 3)) - fptr->size);
+
+
+            memset(pg + (fptr->size % PAGE_SIZE), 0, currSizeToAdd);//sizeLeft);
+
+            if (sizeToAdd + (fptr->size % PAGE_SIZE) > PAGE_SIZE) {
+                printf("if (%li == PAGE_SIZE)", currSizeToAdd);
+                indirectPage[index + 1] = alloc_page();
+            }
+
+            fptr->size += currSizeToAdd;
+            sizeToAdd -= currSizeToAdd;
+        }
+
+        currPage++;
+        pagesToAdd--;
+    }
+
+    fptr->size = size;
+    int rv = 0;
+    printf("truncate(%s, %ld bytes) -> %d\n", path, size, rv);
+    return rv;
+
+}
+
+int
+nufs_truncate_remove(const char *path, off_t size) {
+    //TODO This segfaults?
+    puts("CALL TO TRUNCATE");
+    struct timespec ts;
+    int rv2 = clock_gettime(CLOCK_REALTIME, &ts);
+    if (rv2 < 0) {
+        puts("time error");
+        return -1;
+    }
+    inode *fptr = pathToINode(path);
+    if (fptr == 0) {
+        perror("path not found");
+        return -1;
+    }
+
+    fptr->last_change = ts.tv_sec;
+
+    size_t currNodeSize = fptr->size;
+    int currPage = bytes_to_pages(currNodeSize);
+    int goalPages = bytes_to_pages(size);
+    int pagesToRemove = currPage - goalPages;
+    int sizeToRemove = currNodeSize - size;
+
+    printf("currNodeSize: %zu and size %li\n", currNodeSize, size);
+    printf("currPage %i, goalPages %i, pagesToRemove %i, sizeToRemove  %i\n", currPage, goalPages, pagesToRemove,
+           sizeToRemove);
+
+    while (pagesToRemove > 0) {
+        printf("loop on line 366 with pagesToRemove: %i and size to remove:%i\n", pagesToRemove, sizeToRemove);
+
+        //UPDATE THE SIZE
+        if (currPage == 1) {
+            puts("currPAge 1");
+            void *pg = pages_get_page(fptr->ptrs[0]);
+
+            long currSizeToRemove = min(sizeToRemove, PAGE_SIZE);
+
+            memset(pg + PAGE_SIZE - currSizeToRemove, 0, currSizeToRemove);//sizeLeft);
+
+            if (currSizeToRemove == PAGE_SIZE) {
+                free_page(fptr->ptrs[0]);
+                fptr->ptrs[0] = 0;
+            }
+
+            fptr->size -= currSizeToRemove;
+            sizeToRemove -= currSizeToRemove;
+
+        } else if (currPage == 2) {//numPages == 2) {
+            puts("currPAge 2");
+            void *pg = pages_get_page(fptr->ptrs[1]);
+
+            long currSizeToRemove = min(sizeToRemove, PAGE_SIZE);
+
+
+            memset(pg + PAGE_SIZE - currSizeToRemove, 0, currSizeToRemove);//sizeLeft);
+
+            if (currSizeToRemove == PAGE_SIZE) {
+                free_page(fptr->ptrs[1]);
+                fptr->ptrs[1] = 0;
+            }
+
+            fptr->size -= currSizeToRemove;
+            sizeToRemove -= currSizeToRemove;
+
+        } else {
+            puts("currPAge Else");
+            int indirectPoints = fptr->iptr;
+            int *indirectPage = pages_get_page(indirectPoints);
+
+            if (indirectPage == 0) {
+                perror("Page lookup failed");
+                return -1;
+            }
+
+            int *curr_index_pointer = indirectPage;
+            int index = 0;
+            while (*curr_index_pointer != 0) {
+                printf("loop of while (%i != 0) wiht index %i\n", *curr_index_pointer, index);
+                curr_index_pointer = curr_index_pointer + 1;
+                index++;
+
+                if (index == PAGE_SIZE / sizeof(int)) {
+                    puts("PAGE OVERFLOW");
+                    return -1;
+                }
+            }
+            index--;
+
+            //index is last allocated indx on indirect page
+            if (index == -1) {
+                int indirect = fptr->iptr;
+                pages_free(indirect);
+                fptr->iptr = 0;
+
+                currPage--;
+                pagesToRemove--;
+                continue;
+            }
 
 
             int *currPointer = indirectPage + index;
@@ -473,9 +634,25 @@ nufs_truncate(const char *path, off_t size) {
     }
 
     fptr->size = size;
-    int rv = size;
+    int rv = 0;
     printf("truncate(%s, %ld bytes) -> %d\n", path, size, rv);
     return rv;
+}
+
+int
+nufs_truncate(const char *path, off_t size) {
+    inode *node = pathToINode(path);
+    if (node == 0) {
+        return -1;
+    }
+
+    if (size > node->size) {
+        nufs_truncate_expand(path, size);
+    } else if (size == node->size) {
+        return 0;
+    } else {
+        nufs_truncate_remove(path, size);
+    }
 }
 
 // this is called on open, but doesn't need to do much
