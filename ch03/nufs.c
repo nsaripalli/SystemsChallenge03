@@ -21,7 +21,6 @@
 #include "directory.h"
 
 size_t PAGE_SIZE = 4096;
-//static const int NUM_INODES = 4096 / sizeof(inode);
 static const int NUM_INODES = (2 * 4096) / sizeof(inode);
 
 // Get the inode* at path, else NULL
